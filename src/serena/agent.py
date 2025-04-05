@@ -8,7 +8,7 @@ import os
 import platform
 import sys
 import traceback
-from abc import ABC
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager
@@ -206,7 +206,7 @@ class Component(ABC):
 _DEFAULT_MAX_ANSWER_LENGTH = int(2e5)
 
 
-class Tool(Component):
+class Tool(Component, ABC):
     @classmethod
     def get_name(cls) -> str:
         name = cls.__name__
@@ -216,11 +216,9 @@ class Tool(Component):
         name = "".join(["_" + c.lower() if c.isupper() else c for c in name]).lstrip("_")
         return name
 
-    def get_apply_fn(self) -> Callable:
-        apply_fn = getattr(self, "apply")
-        if apply_fn is None:
-            raise Exception(f"{self} does not define method apply")
-        return apply_fn
+    @abstractmethod
+    def apply(self, **kwargs: Any) -> str:
+        pass
 
     @classmethod
     def get_tool_description(cls) -> str:
@@ -230,8 +228,7 @@ class Tool(Component):
         return docstring.strip()
 
     def get_function_description(self) -> str:
-        apply_fn = self.get_apply_fn()
-        docstring = apply_fn.__doc__
+        docstring = self.apply.__doc__
         if docstring is None:
             raise Exception(f"Missing docstring for {self}")
         return docstring

@@ -95,7 +95,7 @@ class SerenaAgnoToolkit(Toolkit):
             log.info(f"Calling tool {tool}")
             return tool.apply_ex(log_call=True, catch_exceptions=True, **kwargs)
 
-        function = Function.from_callable(tool.get_apply_fn())
+        function = Function.from_callable(tool.apply)
         function.name = tool.get_name()
         function.entrypoint = entrypoint
         function.skip_entrypoint_processing = True
