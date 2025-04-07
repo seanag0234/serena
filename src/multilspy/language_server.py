@@ -782,7 +782,7 @@ class LanguageServer:
                 tree_location = multilspy_types.Location(
                     uri=uri,
                     range=item["range"],
-                    absolutePath=absolute_path,
+                    absolutePath=str(absolute_path),
                     relativePath=relative_file_path,
                 )
                 item["location"] = tree_location
