@@ -14,7 +14,7 @@ def ls_with_ignored_dirs(repo_path: Path) -> Generator[SyncLanguageServer, None,
     config = MultilspyConfig(
         code_language=Language.PYTHON,
         trace_lsp_communication=False,
-        ignored_paths=["scripts", "custom_test"],  # Configure the relative path to be ignored
+        ignored_paths=["scripts", "custom_test", "binary_test"],  # Configure the relative path to be ignored
     )
     logger = MultilspyLogger()
     ls = SyncLanguageServer.create(config, logger, str(repo_path))
@@ -51,7 +51,7 @@ def test_refs_and_symbols_with_glob_patterns(repo_path: Path) -> None:
     config = MultilspyConfig(
         code_language=Language.PYTHON,
         trace_lsp_communication=False,
-        ignored_paths=["*ipts", "custom_t*"],
+        ignored_paths=["*ipts", "custom_t*", "binary_*"],
     )
     logger = MultilspyLogger()
     ls = SyncLanguageServer.create(config, logger, str(repo_path))
@@ -61,8 +61,6 @@ def test_refs_and_symbols_with_glob_patterns(repo_path: Path) -> None:
     root_children = root["children"]
     children_names = {child["name"] for child in root_children}
     assert children_names == {"test_repo", "examples"}
-
-    # test that the refs and symbols with glob patterns are ignored
     definition_file = "test_repo/models.py"
     definition_line = 56
     definition_col = 6

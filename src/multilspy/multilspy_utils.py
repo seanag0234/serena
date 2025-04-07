@@ -18,10 +18,12 @@ from multilspy.multilspy_exceptions import MultilspyException
 from pathlib import PurePath, Path
 from multilspy.multilspy_logger import MultilspyLogger
 
+
 class TextUtils:
     """
     Utilities for text operations.
     """
+
     @staticmethod
     def get_line_col_from_index(text: str, index: int) -> Tuple[int, int]:
         """
@@ -39,7 +41,7 @@ class TextUtils:
             idx += 1
 
         return l, c
-    
+
     @staticmethod
     def get_index_from_line_col(text: str, line: int, col: int) -> int:
         """
@@ -53,24 +55,26 @@ class TextUtils:
             idx += 1
         idx += col
         return idx
-    
+
     @staticmethod
     def get_updated_position_from_line_and_column_and_edit(l: int, c: int, text_to_be_inserted: str) -> Tuple[int, int]:
         """
         Utility function to get the position of the cursor after inserting text at a given line and column.
         """
-        num_newlines_in_gen_text = text_to_be_inserted.count('\n')
+        num_newlines_in_gen_text = text_to_be_inserted.count("\n")
         if num_newlines_in_gen_text > 0:
             l += num_newlines_in_gen_text
-            c = len(text_to_be_inserted.split('\n')[-1])
+            c = len(text_to_be_inserted.split("\n")[-1])
         else:
             c += len(text_to_be_inserted)
         return (l, c)
+
 
 class PathUtils:
     """
     Utilities for platform-agnostic path operations.
     """
+
     @staticmethod
     def uri_to_path(uri: str) -> str:
         """
@@ -88,11 +92,12 @@ class PathUtils:
         parsed = urlparse(uri)
         host = "{0}{0}{mnt}{0}".format(os.path.sep, mnt=parsed.netloc)
         return os.path.normpath(os.path.join(host, url2pathname(unquote(parsed.path))))
-    
+
     @staticmethod
     def is_glob_pattern(pattern: str) -> bool:
         """Check if a pattern contains glob-specific characters."""
-        return any(c in pattern for c in '*?[]!')
+        return any(c in pattern for c in "*?[]!")
+
 
 class FileUtils:
     """
@@ -104,7 +109,15 @@ class FileUtils:
         """
         Reads the file at the given path and returns the contents as a string.
         """
-        encodings = ["utf-8-sig", "utf-16"]
+        # List of encodings to try when opening a file
+        encodings = ["utf-8-sig", "utf-16", "utf-8", "latin-1"]
+
+        # Check if this is likely a binary file based on extension
+        binary_extensions = [".ico", ".jpg", ".jpeg", ".png", ".gif", ".pdf", ".exe", ".dll", ".so", ".bin"]
+        if any(file_path.lower().endswith(ext) for ext in binary_extensions):
+            logger.log(f"File '{file_path}' appears to be a binary file - skipping", logging.WARNING)
+            raise MultilspyException(f"File read '{file_path}' failed: Binary file detected.")
+
         try:
             for encoding in encodings:
                 try:
@@ -112,12 +125,25 @@ class FileUtils:
                         return inp_file.read()
                 except UnicodeError:
                     continue
+
+            # If we get here, we've tried all encodings and still can't read the file
+            # Try reading the first few bytes to check if it's a binary file
+            try:
+                with open(file_path, "rb") as f:
+                    data = f.read(1024)  # Read first 1KB
+                    # Check for NULL bytes, which usually indicate binary data
+                    if b"\x00" in data:
+                        logger.log(f"File '{file_path}' appears to be a binary file - skipping", logging.WARNING)
+                        raise MultilspyException(f"File read '{file_path}' failed: Binary file detected.")
+            except Exception:
+                pass  # If this fails, continue to the general failure message
+
+            logger.log(f"File read '{file_path}' failed: Unsupported encoding.", logging.ERROR)
+            raise MultilspyException(f"File read '{file_path}' failed: Unsupported encoding.")
         except Exception as exc:
             logger.log(f"File read '{file_path}' failed: {exc}", logging.ERROR)
-            raise MultilspyException("File read failed.") from None
-        logger.log(f"File read '{file_path}' failed: Unsupported encoding.", logging.ERROR)
-        raise MultilspyException(f"File read '{file_path}' failed: Unsupported encoding.") from None
-    
+            raise MultilspyException(f"File read '{file_path}' failed: {str(exc)}") from None
+
     @staticmethod
     def download_file(logger: MultilspyLogger, url: str, target_path: str) -> None:
         """
@@ -169,10 +195,12 @@ class FileUtils:
                 if os.path.exists(tmp_file_name):
                     Path.unlink(Path(tmp_file_name))
 
+
 class PlatformId(str, Enum):
     """
     multilspy supported platforms
     """
+
     WIN_x86 = "win-x86"
     WIN_x64 = "win-x64"
     WIN_arm64 = "win-arm64"
@@ -185,15 +213,18 @@ class PlatformId(str, Enum):
     LINUX_MUSL_x64 = "linux-musl-x64"
     LINUX_MUSL_arm64 = "linux-musl-arm64"
 
+
 class DotnetVersion(str, Enum):
     """
     multilspy supported dotnet versions
     """
+
     V4 = "4"
     V6 = "6"
     V7 = "7"
     V8 = "8"
     VMONO = "mono"
+
 
 class PlatformUtils:
     """
@@ -214,7 +245,7 @@ class PlatformUtils:
             platform_id = system_map[system] + "-" + machine_map[machine]
             if system == "Linux" and bitness == "64bit":
                 libc = platform.libc_ver()[0]
-                if libc != 'glibc':
+                if libc != "glibc":
                     platform_id += "-" + libc
             return PlatformId(platform_id)
         else:
@@ -227,12 +258,12 @@ class PlatformUtils:
         """
         try:
             result = subprocess.run(["dotnet", "--list-runtimes"], capture_output=True, check=True)
-            version = ''
-            for line in result.stdout.decode('utf-8').split('\n'):
-                if line.startswith('Microsoft.NETCore.App'):
-                    version = line.split(' ')[1]
+            version = ""
+            for line in result.stdout.decode("utf-8").split("\n"):
+                if line.startswith("Microsoft.NETCore.App"):
+                    version = line.split(" ")[1]
                     break
-            if version == '':
+            if version == "":
                 raise MultilspyException("dotnet not found on the system")
             if version.startswith("8"):
                 return DotnetVersion.V8
@@ -250,4 +281,3 @@ class PlatformUtils:
                 return DotnetVersion.VMONO
             except (FileNotFoundError, subprocess.CalledProcessError):
                 raise MultilspyException("dotnet or mono not found on the system")
-

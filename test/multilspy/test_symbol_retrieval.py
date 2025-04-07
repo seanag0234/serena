@@ -348,7 +348,7 @@ class TestLanguageServerSymbols:
         # Assert that the children are the top-level packages
         child_names = {child["name"] for child in repo_structure[0]["children"]}
         child_kinds = {child["kind"] for child in repo_structure[0]["children"]}
-        assert child_names == {"test_repo", "custom_test", "examples", "scripts"}
+        assert child_names == {"test_repo", "custom_test", "examples", "scripts", "binary_test"}
         assert child_kinds == {SymbolKind.Package}
         examples_package = next(child for child in repo_structure[0]["children"] if child["name"] == "examples")
         # assert that children are __init__ and user_management
