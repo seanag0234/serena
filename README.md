@@ -20,19 +20,52 @@ Note how Serena's tools enable Claude to find and edit the right symbols.
 
 https://github.com/user-attachments/assets/6eaa9aa1-610d-4723-a2d6-bf1e487ba753
 
-### LLM Integration
+### What Is Serena?
+
+Serena is three things at the same time:
+
+1. An MCP server
+2. A toolkit
+3. A fully-featured coding agent
+
+You may wonder how a toolkit can be the same as an agent. But the only thing really differentiating
+a sufficiently capable LLM from an agent is access to tools. With Serena's *symbolic* coding tools, any LLM is turned into a coding agent
+by getting to IDE-like functionality for discovering, analyzing, editing and executing code. We have observed
+Serena to analyze and write code just like seasoned software developers do it. This is in stark contrast to many other coding
+agents that primarily rely on *non-symbolic operations* (like reading and editing chunks of files, 
+and not taking into account relationships between code entities).
 
 Serena provides the necessary [tools](#full-list-of-tools) for coding workflows, but an LLM is required to do the actual work,
 orchestrating tool use.
 
-Serena can be integrated with an LLM in several ways:
- * by using the **model context protocol (MCP)**.  
-   Serena provides an MCP server which integrates with Claude (and [soon also ChatGPT](https://x.com/OpenAIDevs/status/1904957755829481737)).
- * by using **Agno – the model-agnostic agent framework**.  
-   Serena's Agno-based agent allows you to turn virtually any LLM into a coding agent, whether it's provided by Google, OpenAI or DeepSeek (with a paid API key)
-   or a free model provided by Ollama, Together or Anyscale.
- * by incorporating Serena's tools into an agent framework of your choice.  
-   Serena's tool implementation is decoupled from the framework-specific code and can thus easily be adapted to any agent framework.
+#### As an MCP Server Serena Can Be:
+
+* used **completely for free** through Claude Desktop (and [soon also ChatGPT](https://x.com/OpenAIDevs/status/1904957755829481737))
+* integrated in any IDE or extension that supports MCP. This includes VSCode, Cursor, Windsurf, Cline, Roo Code and many others
+* used with any MCP client. Here a list of [popular MCP Clients](https://github.com/punkpeye/awesome-mcp-clients)
+
+The last two options allow using Serena with any LLM of your choice, but will typically 
+require paying for the usage through an API key or a subscription.
+
+#### As a Toolkit Serena Can Be:
+
+* integrated in any LLM framework of your choice that supports tools (will typically require some customization)
+
+This includes Agno (see below), open-web-ui, langchain, pydantic-ai and generally most LLM frameworks. We will be
+rolling out out-of-the-box integrations with various frameworks
+as Serena is being developed.
+
+#### As an Agent Serena Can:
+
+* autonomously complete complex coding tasks
+* be integrated as agent in multi-agent setups
+
+The agentic part of Serena does not primarily refer to an agent interface (like the CLI of Claude Code or Aider) but rather to what matters:
+*agentic behavior*. Including Serena as MCP turns applications like Claude Desktop into a powerful coding agent!
+
+We will be evaluating the performance of Serena as agent and comparing it to other agents in the near future. Stay
+tuned! In our experiments so far, we observed great performance and often preferred the free-version of Serena on Claude Desktop
+to closed-source products requiring subscriptions or charging premiums for token purchases.
 
 ### Programming Language Support & Semantic Analysis
 
