@@ -1,54 +1,18 @@
 """Tests for the context and mode functionality in SerenaAgent."""
 
-import os
 import tempfile
+from pathlib import Path
+
 import pytest
 import yaml
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-from serena.agent import SerenaAgent, PromptFactory, SerenaConfig, ProjectConfig, Tool
+from serena.agent import ProjectConfig, SerenaAgent, Tool
 from serena.llm.multilang_prompt import ContextConfig, ModeConfig
-from multilspy.multilspy_config import Language
-
-
-class MockSerenaConfig:
-    """A mock SerenaConfig for testing."""
-
-    def __init__(self):
-        self.project_names = ["test_project"]
-        self.projects = {}
-        self.gui_log_window_enabled = False
-        self.enable_project_activation = True
-
-    def get_project_configuration(self, project_name):
-        return self.projects.get(project_name)
-
-
-class MockProjectConfig:
-    """A mock ProjectConfig for testing."""
-
-    def __init__(self, name="test_project", language=Language.PYTHON, read_only=False, excluded_tools=None):
-        self.project_name = name
-        self.language = language
-        self.read_only = read_only
-        self.excluded_tools = set(excluded_tools or [])
-        self.project_root = "/tmp/test_project"
-        self.ignored_paths = []
-        self.ignore_all_files_in_gitignore = True
-
-    def get_serena_managed_dir(self):
-        return os.path.join(self.project_root, ".serena")
+from serena.llm.prompt_factory import PromptFactory
 
 
 @pytest.fixture
-def mock_serena_config():
-    """Create a mock SerenaConfig."""
-    return MockSerenaConfig()
-
-
-@pytest.fixture
-def test_context_mode_files():
+def temp_config_files():
     """Create temporary context and mode YAML files for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_contexts_dir = Path(temp_dir) / "contexts"
@@ -124,78 +88,67 @@ def test_context_mode_files():
         yield temp_dir
 
 
-@pytest.fixture
-def mock_agent(monkeypatch, mock_serena_config, test_context_mode_files):
-    """Create a SerenaAgent with mocked components for testing."""
-
-    # Mock SerenaConfig singleton to return our mock
-    def mock_serena_config_init(self):
-        self.projects = mock_serena_config.projects
-        self.project_names = mock_serena_config.project_names
-        self.gui_log_window_enabled = mock_serena_config.gui_log_window_enabled
-        self.enable_project_activation = mock_serena_config.enable_project_activation
-
-    monkeypatch.setattr(SerenaConfig, "__init__", mock_serena_config_init)
-
-    # Create a mock language server
-    mock_language_server = MagicMock()
-    mock_language_server.is_running.return_value = True
-
-    # Mock the SymbolManager and MemoriesManager
-    mock_symbol_manager = MagicMock()
-    mock_memories_manager = MagicMock()
-
-    # Mock the entire SerenaAgent.__init__ to avoid language server initialization
-    original_init = SerenaAgent.__init__
-
-    def mock_init(self, project_file_path=None, project_activation_callback=None, context=None, modes=None):
-        # Create a partial initialization, skipping language server startup
-        self.serena_config = mock_serena_config
-        self.prompt_factory = PromptFactory()
-        self._project_activation_callback = project_activation_callback
-
-        # Set context and modes
-        self._set_context_and_modes(context, modes)
-
-        # Mock project-specific instances
-        self.project_config = None
-        self.language_server = mock_language_server
-        self.symbol_manager = mock_symbol_manager
-        self.memories_manager = mock_memories_manager
-        self.lines_read = MagicMock()
-
-        # Mock the tools
-        self._all_tools = {}
-        self._active_tools = {}
-
-        # Mock the project config without activating a real project
-        project_config = MockProjectConfig(excluded_tools=["project_excluded_tool"])
-        mock_serena_config.projects["test_project"] = project_config
-
-    # Apply the mock init
-    monkeypatch.setattr(SerenaAgent, "__init__", mock_init)
-
-    # Mock the prompt template folder method to use our temporary directory
-    monkeypatch.setattr(
-        "serena.llm.multilang_prompt.MultiLangPromptTemplateCollection._prompt_template_folder",
-        classmethod(lambda cls: test_context_mode_files),
+def test_context_config():
+    """Test that ContextConfig is properly initialized with correct attributes."""
+    context = ContextConfig(
+        name="test_context",
+        description="Test description",
+        system_prompt_addition="Test system prompt addition",
+        excluded_tools=["tool1", "tool2"],
     )
 
-    # Create the agent
-    agent = SerenaAgent()
-
-    # Set the project config for testing tool exclusions
-    agent.project_config = MockProjectConfig(excluded_tools=["project_excluded_tool"])
-
-    yield agent
-
-    # Restore original init
-    monkeypatch.setattr(SerenaAgent, "__init__", original_init)
+    assert context.name == "test_context"
+    assert context.description == "Test description"
+    assert context.system_prompt_addition == "Test system prompt addition"
+    assert context.excluded_tools == ["tool1", "tool2"]
 
 
-def test_context_loading(mock_agent):
-    """Test that contexts can be loaded correctly."""
-    prompt_factory = mock_agent.prompt_factory
+def test_mode_config():
+    """Test that ModeConfig is properly initialized with correct attributes."""
+    mode = ModeConfig(
+        name="test_mode",
+        description="Test description",
+        system_prompt_addition="Test system prompt addition",
+        excluded_tools=["tool1", "tool2"],
+    )
+
+    assert mode.name == "test_mode"
+    assert mode.description == "Test description"
+    assert mode.system_prompt_addition == "Test system prompt addition"
+    assert mode.excluded_tools == ["tool1", "tool2"]
+
+
+def test_context_loading_from_yaml(temp_config_files):
+    """Test that contexts can be loaded correctly from YAML files."""
+    context_path = Path(temp_config_files) / "contexts" / "context_a.yml"
+    context = ContextConfig.from_yaml(context_path)
+
+    assert context.name == "context_a"
+    assert context.description == "Test context A"
+    assert "Context A prompt addition" in context.system_prompt_addition
+    assert context.excluded_tools == ["tool_a", "tool_b"]
+
+
+def test_mode_loading_from_yaml(temp_config_files):
+    """Test that modes can be loaded correctly from YAML files."""
+    mode_path = Path(temp_config_files) / "modes" / "mode_x.yml"
+    mode = ModeConfig.from_yaml(mode_path)
+
+    assert mode.name == "mode_x"
+    assert mode.description == "Test mode X"
+    assert "Mode X prompt addition" in mode.system_prompt_addition
+    assert mode.excluded_tools == ["tool_d", "tool_e"]
+
+
+def test_prompt_factory_with_context_and_modes(monkeypatch, temp_config_files):
+    """Test that PromptFactory correctly handles context and modes."""
+    # Patch the prompt template folder method to use our temp directory
+    monkeypatch.setattr(
+        "serena.llm.multilang_prompt.MultiLangPromptTemplateCollection._prompt_template_folder", lambda cls: temp_config_files
+    )
+
+    # Create a fresh prompt factory
+    prompt_factory = PromptFactory()
 
     # Test with context_a
     prompt_factory.set_context("context_a")
@@ -210,11 +163,6 @@ def test_context_loading(mock_agent):
     assert prompt_factory.context.name == "context_b"
     assert prompt_factory.context.excluded_tools == ["tool_c"]
     assert "Context B prompt addition" in prompt_factory.context.system_prompt_addition
-
-
-def test_mode_loading(mock_agent):
-    """Test that modes can be loaded correctly."""
-    prompt_factory = mock_agent.prompt_factory
 
     # Test with mode_x
     prompt_factory.set_modes(["mode_x"])
@@ -237,9 +185,14 @@ def test_mode_loading(mock_agent):
     assert prompt_factory.modes[1].name == "mode_y"
 
 
-def test_excluded_tools_collection(mock_agent):
+def test_excluded_tools_collection(monkeypatch, temp_config_files):
     """Test that excluded tools are correctly collected from context and modes."""
-    prompt_factory = mock_agent.prompt_factory
+    # Patch the prompt template folder method to use our temp directory
+    monkeypatch.setattr(
+        "serena.llm.multilang_prompt.MultiLangPromptTemplateCollection._prompt_template_folder", lambda cls: temp_config_files
+    )
+
+    prompt_factory = PromptFactory()
 
     # Set context and modes
     prompt_factory.set_context("context_a")
@@ -252,164 +205,118 @@ def test_excluded_tools_collection(mock_agent):
     assert set(excluded_tools) == {"tool_a", "tool_b", "tool_d", "tool_e", "tool_f"}
 
 
-def test_system_prompt_with_context_and_modes(mock_agent):
+def test_system_prompt_with_context_and_modes(monkeypatch, temp_config_files):
     """Test that the system prompt includes context and mode additions."""
-    prompt_factory = mock_agent.prompt_factory
+    # Patch the prompt template folder method to use our temp directory
+    monkeypatch.setattr(
+        "serena.llm.multilang_prompt.MultiLangPromptTemplateCollection._prompt_template_folder", lambda cls: temp_config_files
+    )
 
-    # Store the original system prompt method to restore it later
-    original_method = prompt_factory._format_prompt
+    prompt_factory = PromptFactory()
 
-    try:
-        # Mock the prompt formatting to just return our template values
-        def mock_format_prompt(prompt_name, kwargs):
-            if prompt_name == "system_prompt":
-                context = kwargs.get("context", "")
-                modes = kwargs.get("modes", [])
-                return f"SYSTEM_PROMPT_BASE|{context}|{'|'.join(modes)}"
-            return original_method(prompt_name, kwargs)
+    # Create direct contexts and modes
+    context_a = ContextConfig("context_a", "Test A", "Context_A_Addition", [])
+    mode_x = ModeConfig("mode_x", "Test X", "Mode_X_Addition", [])
+    mode_y = ModeConfig("mode_y", "Test Y", "Mode_Y_Addition", [])
 
-        prompt_factory._format_prompt = mock_format_prompt
+    # Monkey patch get_context and get_mode methods to return our test contexts/modes
+    original_get_context = prompt_factory.collection.get_context
+    original_get_mode = prompt_factory.collection.get_mode
 
-        # Test with no context or modes
-        system_prompt = prompt_factory.create_system_prompt()
-        assert system_prompt == "SYSTEM_PROMPT_BASE||"
+    def mock_get_context(name_or_path):
+        if name_or_path == "context_a":
+            return context_a
+        return original_get_context(name_or_path)
 
-        # Test with context only
-        prompt_factory.set_context("context_a")
-        system_prompt = prompt_factory.create_system_prompt()
-        assert system_prompt == "SYSTEM_PROMPT_BASE|Context A prompt addition|"
+    def mock_get_mode(name_or_path):
+        if name_or_path == "mode_x":
+            return mode_x
+        elif name_or_path == "mode_y":
+            return mode_y
+        return original_get_mode(name_or_path)
 
-        # Test with modes only
-        prompt_factory.set_context(None)
-        prompt_factory.set_modes(["mode_x", "mode_y"])
-        system_prompt = prompt_factory.create_system_prompt()
-        assert system_prompt == "SYSTEM_PROMPT_BASE||Mode X prompt addition|Mode Y prompt addition"
+    monkeypatch.setattr(prompt_factory.collection, "get_context", mock_get_context)
+    monkeypatch.setattr(prompt_factory.collection, "get_mode", mock_get_mode)
 
-        # Test with both context and modes
-        prompt_factory.set_context("context_b")
-        prompt_factory.set_modes(["mode_x"])
-        system_prompt = prompt_factory.create_system_prompt()
-        assert system_prompt == "SYSTEM_PROMPT_BASE|Context B prompt addition|Mode X prompt addition"
-    finally:
-        # Restore original method
-        prompt_factory._format_prompt = original_method
+    # Monkey patch system_prompt template to directly return our context and mode strings
+    original_format_prompt = prompt_factory._format_prompt
 
+    def mock_format_prompt(prompt_name, kwargs):
+        if prompt_name == "system_prompt":
+            context = kwargs.get("context", "")
+            modes = kwargs.get("modes", [])
+            return f"SYSTEM_PROMPT_BASE|{context}|{'|'.join(modes)}"
+        return original_format_prompt(prompt_name, kwargs)
 
-def test_project_tool_exclusion_priority(mock_agent):
-    """Test that project tool exclusions have highest priority."""
+    monkeypatch.setattr(prompt_factory, "_format_prompt", mock_format_prompt)
 
-    # Create mock tools
-    class MockTool(Tool):
-        def __init__(self, name):
-            self.name = name
+    # Test with no context or modes
+    prompt_factory.set_context(None)
+    prompt_factory.set_modes([])
+    system_prompt = prompt_factory.create_system_prompt()
+    assert system_prompt == "SYSTEM_PROMPT_BASE||"
 
-        def get_name(self):
-            return self.name
+    # Test with context only
+    prompt_factory.set_context("context_a")
+    system_prompt = prompt_factory.create_system_prompt()
+    assert system_prompt == "SYSTEM_PROMPT_BASE|Context_A_Addition|"
 
-    # Create mock tools to test exclusions
-    tools = {
-        "tool_a": MockTool("tool_a"),  # Excluded by context_a
-        "tool_c": MockTool("tool_c"),  # Excluded by context_b
-        "tool_d": MockTool("tool_d"),  # Excluded by mode_x
-        "tool_f": MockTool("tool_f"),  # Excluded by mode_y
-        "project_excluded_tool": MockTool("project_excluded_tool"),  # Excluded by project config
-        "normal_tool": MockTool("normal_tool"),  # Not excluded
-    }
+    # Test with modes only
+    prompt_factory.set_context(None)
+    prompt_factory.set_modes(["mode_x", "mode_y"])
+    system_prompt = prompt_factory.create_system_prompt()
+    assert system_prompt == "SYSTEM_PROMPT_BASE||Mode_X_Addition|Mode_Y_Addition"
 
-    # Set up the agent with our mock tools
-    mock_agent._all_tools = {tool: tool for tool in tools.values()}
-    mock_agent.prompt_factory.set_context("context_a")
-    mock_agent.prompt_factory.set_modes(["mode_x"])
-
-    # Activate project with specific tool exclusions
-    mock_agent.project_config = MockProjectConfig(excluded_tools=["project_excluded_tool", "tool_a"])
-    mock_agent._update_active_tools()
-
-    # Check which tools are active
-    active_tool_names = mock_agent.get_active_tool_names()
-
-    # project_excluded_tool and tool_a should be excluded (from project config)
-    # tool_d should be excluded (from mode_x)
-    # normal_tool should be included
-    assert "project_excluded_tool" not in active_tool_names
-    assert "tool_a" not in active_tool_names
-    assert "tool_d" not in active_tool_names
-    assert "normal_tool" in active_tool_names
-
-    # Change context to context_b which excludes tool_c
-    mock_agent.prompt_factory.set_context("context_b")
-    mock_agent._update_active_tools()
-    active_tool_names = mock_agent.get_active_tool_names()
-
-    # Now tool_c should also be excluded
-    assert "tool_c" not in active_tool_names
-
-    # Even if we switch to a context that doesn't exclude tool_a,
-    # it should still be excluded because the project exclusion has priority
-    assert "tool_a" not in active_tool_names
+    # Test with both context and modes
+    prompt_factory.set_context("context_a")
+    prompt_factory.set_modes(["mode_x"])
+    system_prompt = prompt_factory.create_system_prompt()
+    assert system_prompt == "SYSTEM_PROMPT_BASE|Context_A_Addition|Mode_X_Addition"
 
 
-def test_set_modes_tool(mock_agent):
-    """Test that the set_modes method correctly updates modes and tools."""
-
-    # Create mock tools
-    class MockTool(Tool):
-        def __init__(self, name):
-            self.name = name
-
-        def get_name(self):
-            return self.name
-
-    # Create mock tools to test exclusions
-    tools = {
-        "tool_d": MockTool("tool_d"),  # Excluded by mode_x
-        "tool_f": MockTool("tool_f"),  # Excluded by mode_y
-        "normal_tool": MockTool("normal_tool"),  # Not excluded
-    }
-
-    # Set up the agent with our mock tools
-    mock_agent._all_tools = {tool: tool for tool in tools.values()}
-    mock_agent.project_config = MockProjectConfig()
-
-    # Initial state with mode_x
-    mock_agent.set_modes(["mode_x"])
-    mock_agent._update_active_tools()
-
-    # Check initial active tools
-    active_tool_names = mock_agent.get_active_tool_names()
-    assert "tool_d" not in active_tool_names
-    assert "tool_f" in active_tool_names
-    assert "normal_tool" in active_tool_names
-
-    # Change to mode_y
-    result = mock_agent.set_modes(["mode_y"])
-
-    # Verify success result
-    assert result == "OK"
-
-    # Check that tools were updated
-    active_tool_names = mock_agent.get_active_tool_names()
-    assert "tool_d" in active_tool_names
-    assert "tool_f" not in active_tool_names
-    assert "normal_tool" in active_tool_names
-
-
-def test_mode_conflict_detection():
+def test_mode_conflict_detection(monkeypatch, temp_config_files):
     """Test that conflicting mode tool exclusions are detected."""
-    # Create test agent and prompt factory
-    agent = SerenaAgent.__new__(SerenaAgent)
-    agent.prompt_factory = PromptFactory()
+    # Patch the prompt template folder method to use our temp directory
+    monkeypatch.setattr(
+        "serena.llm.multilang_prompt.MultiLangPromptTemplateCollection._prompt_template_folder", lambda cls: temp_config_files
+    )
 
-    # Create conflicting modes
-    mode1 = ModeConfig("conflict_1", "desc1", "prompt1", ["conflict_tool"])
-    mode2 = ModeConfig("conflict_2", "desc2", "prompt2", [])
+    # Create a SerenaAgent
+    class MockLanguageServer:
+        def __init__(self):
+            self.started = False
 
-    # Set up the modes directly in the prompt factory
-    agent.prompt_factory.modes = [mode1, mode2]
+        def start(self):
+            self.started = True
 
-    # Call the conflict detection logic directly
+        def is_running(self):
+            return self.started
+
+        def stop(self):
+            self.started = False
+
+    # Create a test project config
+    temp_dir = tempfile.mkdtemp()
+    project_config = ProjectConfig(
+        config_dict={"language": "python", "project_root": temp_dir, "ignored_paths": [], "ignore_all_files_in_gitignore": True},
+        project_name="test_project",
+    )
+
+    # Test that an error is raised for conflicting modes
     with pytest.raises(ValueError) as excinfo:
-        # Check for tool exclusion conflicts between modes
+        # Create modes with conflicting tool exclusion
+        mode1 = ModeConfig("conflict_1", "desc1", "prompt1", ["conflict_tool"])
+        mode2 = ModeConfig("conflict_2", "desc2", "prompt2", [])
+
+        # Create a prompt factory
+        prompt_factory = PromptFactory()
+        prompt_factory.modes = [mode1, mode2]
+
+        # Create an agent - no real initialization
+        agent = SerenaAgent.__new__(SerenaAgent)
+        agent.prompt_factory = prompt_factory
+
+        # Call the conflict detection logic directly
         mode_excluded_tools = {}
         for mode in agent.prompt_factory.modes:
             for tool_name in mode.excluded_tools:
@@ -433,45 +340,232 @@ def test_mode_conflict_detection():
     assert "excluded in modes [conflict_1] but not in [conflict_2]" in str(excinfo.value)
 
 
-def test_read_only_project_config(mock_agent):
-    """Test that read_only project config disables editing tools."""
+class TestToolWithContext:
+    """Test full SerenaAgent with context and modes."""
 
-    # Define mock tool classes with and without edit capability
-    class MockEditTool(Tool):
-        @classmethod
-        def can_edit(cls):
-            return True
+    # Create a sample tool for testing
+    class MockTool(Tool):
+        def __init__(self, agent, name):
+            super().__init__(agent)
+            self._name = name
 
         def get_name(self):
-            return "edit_tool"
+            return self._name
 
+        def apply(self):
+            return f"Tool {self._name} executed"
+
+    # Read-only tool
     class MockReadTool(Tool):
+        def __init__(self, agent, name):
+            super().__init__(agent)
+            self._name = name
+
+        def get_name(self):
+            return self._name
+
         @classmethod
         def can_edit(cls):
             return False
 
+        def apply(self):
+            return f"Read tool {self._name} executed"
+
+    # Editing tool
+    class MockEditTool(Tool):
+        def __init__(self, agent, name):
+            super().__init__(agent)
+            self._name = name
+
         def get_name(self):
-            return "read_tool"
+            return self._name
 
-    # Set up the agent with our mock tools
-    edit_tool = MockEditTool(mock_agent)
-    read_tool = MockReadTool(mock_agent)
-    mock_agent._all_tools = {MockEditTool: edit_tool, MockReadTool: read_tool}
+        @classmethod
+        def can_edit(cls):
+            return True
 
-    # Set non-read-only project first
-    mock_agent.project_config = MockProjectConfig(read_only=False)
-    mock_agent._update_active_tools()
+        def apply(self):
+            return f"Edit tool {self._name} executed"
 
-    # Both tools should be active
-    active_tool_names = mock_agent.get_active_tool_names()
-    assert "edit_tool" in active_tool_names
-    assert "read_tool" in active_tool_names
+    def setup_agent_with_tools(self, monkeypatch, temp_config_files):
+        """Create an agent with tools for testing."""
+        # Patch the prompt template folder method to use our temp directory
+        monkeypatch.setattr(
+            "serena.llm.multilang_prompt.MultiLangPromptTemplateCollection._prompt_template_folder", lambda cls: temp_config_files
+        )
 
-    # Now set read-only project
-    mock_agent.project_config = MockProjectConfig(read_only=True)
-    mock_agent._update_active_tools()
+        # Get references to the mock tool classes outside the scope
+        MockTool = self.MockTool
+        MockReadTool = self.MockReadTool
+        MockEditTool = self.MockEditTool
 
-    # Only read tools should be active
-    active_tool_names = mock_agent.get_active_tool_names()
-    assert "edit_tool" not in active_tool_names
-    assert "read_tool" in active_tool_names
+        # Temporarily disable real language server setup
+        original_create = SerenaAgent.__init__
+
+        def mock_init(self, project_file_path=None, project_activation_callback=None, context=None, modes=None):
+            # Basic initialization
+            self.prompt_factory = PromptFactory()
+            self._set_context_and_modes(context, modes)
+
+            # Create test tools
+            self._all_tools = {}
+
+            # Each tool needs a different key in _all_tools, so we create unique class instances
+            class ToolA(MockTool):
+                pass
+
+            class ToolC(MockTool):
+                pass
+
+            class ToolD(MockTool):
+                pass
+
+            class ToolF(MockTool):
+                pass
+
+            class ProjectExcludedTool(MockTool):
+                pass
+
+            class NormalTool(MockTool):
+                pass
+
+            class ReadTool(MockReadTool):
+                pass
+
+            class EditTool(MockEditTool):
+                pass
+
+            tools = [
+                ToolA(self, "tool_a"),  # Excluded by context_a
+                ToolC(self, "tool_c"),  # Excluded by context_b
+                ToolD(self, "tool_d"),  # Excluded by mode_x
+                ToolF(self, "tool_f"),  # Excluded by mode_y
+                ProjectExcludedTool(self, "project_excluded_tool"),  # Will be excluded by project
+                NormalTool(self, "normal_tool"),  # Not excluded
+                ReadTool(self, "read_tool"),  # Read-only tool
+                EditTool(self, "edit_tool"),  # Editing tool
+            ]
+
+            for tool in tools:
+                self._all_tools[tool.__class__] = tool
+
+            self._active_tools = dict(self._all_tools)
+
+            # Create a test project config
+            temp_dir = tempfile.mkdtemp()
+            self.project_config = ProjectConfig(
+                config_dict={
+                    "language": "python",
+                    "project_root": temp_dir,
+                    "ignored_paths": [],
+                    "excluded_tools": ["project_excluded_tool"],
+                    "read_only": False,
+                    "ignore_all_files_in_gitignore": True,
+                },
+                project_name="test_project",
+            )
+
+            # Create minimal language server
+            class MinimalLanguageServer:
+                def is_running(self):
+                    return True
+
+                def stop(self):
+                    pass
+
+            self.language_server = MinimalLanguageServer()
+            self.serena_config = type("obj", (object,), {"enable_project_activation": True})
+
+        monkeypatch.setattr(SerenaAgent, "__init__", mock_init)
+
+        try:
+            # Create agent
+            agent = SerenaAgent()
+            return agent
+        finally:
+            # Restore original init
+            monkeypatch.setattr(SerenaAgent, "__init__", original_create)
+
+    def test_project_tool_exclusion_priority(self, monkeypatch, temp_config_files):
+        """Test that project tool exclusions have highest priority."""
+        agent = self.setup_agent_with_tools(monkeypatch, temp_config_files)
+
+        # Set context and mode
+        agent.prompt_factory.set_context("context_a")
+        agent.prompt_factory.set_modes(["mode_x"])
+        agent._update_active_tools()
+
+        # Check active tools
+        active_tool_names = agent.get_active_tool_names()
+
+        # These should be excluded
+        assert "project_excluded_tool" not in active_tool_names  # project config
+        assert "tool_a" not in active_tool_names  # context_a
+        assert "tool_d" not in active_tool_names  # mode_x
+
+        # These should be included
+        assert "normal_tool" in active_tool_names
+
+        # Change context to one that doesn't exclude tool_a
+        agent.prompt_factory.set_context("context_b")
+        agent._update_active_tools()
+
+        # Check active tools again
+        active_tool_names = agent.get_active_tool_names()
+
+        # Now tool_c should be excluded, but tool_a included
+        assert "tool_c" not in active_tool_names  # context_b
+        assert "tool_a" in active_tool_names  # no longer excluded
+
+        # Update project config to exclude tool_a
+        agent.project_config.excluded_tools.add("tool_a")
+        agent._update_active_tools()
+
+        # Check that project exclusion takes priority
+        active_tool_names = agent.get_active_tool_names()
+        assert "tool_a" not in active_tool_names  # now excluded by project
+
+    def test_read_only_project_config(self, monkeypatch, temp_config_files):
+        """Test that read_only project config disables editing tools."""
+        agent = self.setup_agent_with_tools(monkeypatch, temp_config_files)
+
+        # Set non-read-only first and check tools
+        agent.project_config.read_only = False
+        agent._update_active_tools()
+
+        active_tool_names = agent.get_active_tool_names()
+        assert "read_tool" in active_tool_names
+        assert "edit_tool" in active_tool_names
+
+        # Now set read_only to true
+        agent.project_config.read_only = True
+        agent._update_active_tools()
+
+        # Check only read tools are available
+        active_tool_names = agent.get_active_tool_names()
+        assert "read_tool" in active_tool_names
+        assert "edit_tool" not in active_tool_names
+
+    def test_set_modes_dynamic_tool_update(self, monkeypatch, temp_config_files):
+        """Test that set_modes correctly updates the active tools."""
+        agent = self.setup_agent_with_tools(monkeypatch, temp_config_files)
+
+        # Initial state with mode_x
+        agent.set_modes(["mode_x"])
+        agent._update_active_tools()
+
+        # Check initial active tools
+        active_tool_names = agent.get_active_tool_names()
+        assert "tool_d" not in active_tool_names  # excluded by mode_x
+        assert "tool_f" in active_tool_names  # not excluded
+
+        # Change to mode_y
+        result = agent.set_modes(["mode_y"])
+
+        # Verify success result
+        assert result == "OK"
+
+        # Check that tools were updated
+        active_tool_names = agent.get_active_tool_names()
+        assert "tool_d" in active_tool_names  # no longer excluded
+        assert "tool_f" not in active_tool_names  # now excluded by mode_y

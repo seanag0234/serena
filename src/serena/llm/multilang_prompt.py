@@ -1,5 +1,6 @@
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Generic, TypeVar
@@ -114,16 +115,16 @@ class MultiLangPromptList(MultiLangContainer[PromptList]):
     pass
 
 
+@dataclass
 class ContextConfig:
     """
     Configuration for a specific context.
     """
 
-    def __init__(self, name: str, description: str, system_prompt_addition: str, excluded_tools: list[str]) -> None:
-        self.name = name
-        self.description = description
-        self.system_prompt_addition = system_prompt_addition
-        self.excluded_tools = excluded_tools
+    name: str
+    description: str
+    system_prompt_addition: str
+    excluded_tools: list[str]
 
     @classmethod
     def from_yaml(cls, yaml_path: Path) -> "ContextConfig":
@@ -137,16 +138,16 @@ class ContextConfig:
         )
 
 
+@dataclass
 class ModeConfig:
     """
     Configuration for a specific mode.
     """
 
-    def __init__(self, name: str, description: str, system_prompt_addition: str, excluded_tools: list[str]) -> None:
-        self.name = name
-        self.description = description
-        self.system_prompt_addition = system_prompt_addition
-        self.excluded_tools = excluded_tools
+    name: str
+    description: str
+    system_prompt_addition: str
+    excluded_tools: list[str]
 
     @classmethod
     def from_yaml(cls, yaml_path: Path) -> "ModeConfig":

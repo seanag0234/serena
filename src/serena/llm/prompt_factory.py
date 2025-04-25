@@ -5,8 +5,8 @@
 from typing import Optional, List
 
 from .multilang_prompt import (
-    MultiLangContainer,
-    MultiLangPromptTemplateCollection,
+    MultiLangContainer, 
+    MultiLangPromptTemplateCollection, 
     PromptList,
     ContextConfig,
     ModeConfig,
@@ -31,7 +31,7 @@ class PromptFactory:
     def _get_list(self, prompt_name: str) -> PromptList:
         mpl = self.collection.get_multilang_prompt_list(prompt_name)
         return mpl.get_item(self.lang_shortcode, self.fallback_mode)
-
+        
     def set_context(self, context_name_or_path: Optional[str]) -> None:
         """
         Set the current context.
@@ -68,36 +68,39 @@ class PromptFactory:
             excluded_tools.extend(mode.excluded_tools)
 
         return list(set(excluded_tools))  # Deduplicate
+        
 
     def create_onboarding_prompt(self, *, system) -> str:
-        return self._format_prompt("onboarding_prompt", locals())
+        return self._format_prompt('onboarding_prompt', locals())
 
     def create_think_about_collected_information(self) -> str:
-        return self._format_prompt("think_about_collected_information", locals())
+        return self._format_prompt('think_about_collected_information', locals())
 
     def create_think_about_task_adherence(self) -> str:
-        return self._format_prompt("think_about_task_adherence", locals())
+        return self._format_prompt('think_about_task_adherence', locals())
 
     def create_think_about_whether_you_are_done(self) -> str:
-        return self._format_prompt("think_about_whether_you_are_done", locals())
+        return self._format_prompt('think_about_whether_you_are_done', locals())
 
     def create_summarize_changes(self) -> str:
-        return self._format_prompt("summarize_changes", locals())
+        return self._format_prompt('summarize_changes', locals())
 
     def create_prepare_for_new_conversation(self) -> str:
-        return self._format_prompt("prepare_for_new_conversation", locals())
+        return self._format_prompt('prepare_for_new_conversation', locals())
 
     def create_system_prompt(self) -> str:
         # Prepare context and modes for the template
         context_str = ""
         if self.context:
             context_str = self.context.system_prompt_addition
-
+        
         mode_strings = []
         for mode in self.modes:
             mode_strings.append(mode.system_prompt_addition)
-
+        
         # Create locals for the template
         template_locals = {"self": self, "context": context_str, "modes": mode_strings}
+        
+        return self._format_prompt('system_prompt', template_locals)
 
-        return self._format_prompt("system_prompt", template_locals)
+    
