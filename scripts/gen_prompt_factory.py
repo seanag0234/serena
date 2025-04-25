@@ -16,13 +16,13 @@ def main():
     for mpt in coll.prompt_templates.values():
         prompt_name = mpt.name
         params = mpt.get_parameters()
-        
+
         # Special handling for system_prompt
         if prompt_name == "system_prompt":
             methods.append(
                 f"def create_{prompt_name}(self) -> str:"
                 + f"\n{indent}{indent}# Prepare context and modes for the template"
-                + f"\n{indent}{indent}context_str = \"\""
+                + f'\n{indent}{indent}context_str = ""'
                 + f"\n{indent}{indent}if self.context:"
                 + f"\n{indent}{indent}    context_str = self.context.system_prompt_addition"
                 + f"\n{indent}{indent}"
@@ -31,7 +31,7 @@ def main():
                 + f"\n{indent}{indent}    mode_strings.append(mode.system_prompt_addition)"
                 + f"\n{indent}{indent}"
                 + f"\n{indent}{indent}# Create locals for the template"
-                + f"\n{indent}{indent}template_locals = {{\"self\": self, \"context\": context_str, \"modes\": mode_strings}}"
+                + f'\n{indent}{indent}template_locals = {{"self": self, "context": context_str, "modes": mode_strings}}'
                 + f"\n{indent}{indent}"
                 + f"\n{indent}{indent}return self._format_prompt('{prompt_name}', template_locals)\n\n{indent}"
             )
@@ -44,7 +44,7 @@ def main():
                 f"def create_{prompt_name}(self{params_str}) -> str:"
                 + f"\n{indent}{indent}return self._format_prompt('{prompt_name}', locals())\n\n{indent}"
             )
-            
+
     for mpl in coll.prompt_lists.values():
         prompt_name = mpl.name
         methods.append(
