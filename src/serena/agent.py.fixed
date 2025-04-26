@@ -182,6 +182,7 @@ class LinesRead:
             del self.files[relative_path]
 
 
+class SerenaAgent:
     def __init__(self, project_file_path: str | None = None, project_activation_callback: Callable[[], None] | None = None):
     def __init__(
         self, 
