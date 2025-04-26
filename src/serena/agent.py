@@ -15,6 +15,10 @@ from logging import Logger
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, TypeVar, Union, cast
 
+# Import here so we have the type
+if TYPE_CHECKING:
+    from serena.util.config_loader import ConfigData
+
 import yaml
 from sensai.util import logging
 from sensai.util.logging import FallbackHandler
@@ -225,11 +229,11 @@ class SerenaAgent:
         self._project_activation_callback = project_activation_callback
 
         # Load context and mode configuration
-        from serena.util.config_loader import ConfigLoader
+        from serena.util.config_loader import ConfigData, ConfigLoader
 
         self.config_loader = ConfigLoader()
-        self.current_context = None
-        self.current_modes = []
+        self.current_context: ConfigData | None = None
+        self.current_modes: list[ConfigData] = []
 
         # Set context and modes if provided
         if context is not None:
@@ -350,7 +354,7 @@ class SerenaAgent:
             log.error(f"Failed to set modes {modes}: {e}")
             raise
 
-    def _check_mode_conflicts(self, mode_configs: list) -> None:
+    def _check_mode_conflicts(self, mode_configs: list["ConfigData"]) -> None:
         """
         Check for conflicts in tool exclusions between modes.
 
@@ -361,7 +365,7 @@ class SerenaAgent:
             return
 
         # Check for conflicts in tool exclusions
-        tools_excluded_by_mode = {}
+        tools_excluded_by_mode: dict[str, str] = {}
         for mode in mode_configs:
             for tool in mode.excluded_tools:
                 if tool in tools_excluded_by_mode:
@@ -369,7 +373,7 @@ class SerenaAgent:
                     other_mode = tools_excluded_by_mode[tool]
                     if other_mode != mode.name:
                         raise ValueError(
-                            f"Conflict between modes: Tool '{tool}' is excluded in mode '{other_mode}' " f"but also in mode '{mode.name}'"
+                            f"Conflict between modes: Tool '{tool}' is excluded in mode '{other_mode}' but also in mode '{mode.name}'"
                         )
                 else:
                     tools_excluded_by_mode[tool] = mode.name
