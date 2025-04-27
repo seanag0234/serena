@@ -10,6 +10,7 @@ from sensai.util import logging
 
 log = logging.getLogger(__name__)
 
+
 @dataclass
 class ToolSettings:
     """Configuration for tool settings."""
