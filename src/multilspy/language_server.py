@@ -414,28 +414,34 @@ class LanguageServer:
             )
             del self.open_file_buffers[uri]
             
+    def _invalidate_document_symbols_cache(self, relative_file_path: str) -> None:
+        symbol_cache_keys = [self._get_cache_key(relative_file_path, include_body=True), self._get_cache_key(relative_file_path, include_body=False)]
+        for cache_key in symbol_cache_keys:
+            cached_document_symbols = self._document_symbols_cache.pop(cache_key, None)
+            if cached_document_symbols is not None:
+                self.logger.log(f"Invalidating in-memory cache of document symbols for {relative_file_path} due to content change notification", logging.DEBUG)
+                self._cache_has_changed = True
+            
+            
     def notify_change_text_document(self, relative_file_path: str, content_changes: List[lsp_types.TextDocumentContentChangeEvent]) -> None:
         """
         Notify the Language Server that the content of the given file has changed.
         Also, invalidate the in-memory cache of document symbols for the given file.
         """
-        cached_document_symbols = self._document_symbols_cache.pop(relative_file_path, None)
-        if cached_document_symbols is not None:
-            self.logger.log(f"Invalidating in-memory cache of document symbols for {relative_file_path} due to content change notification", logging.DEBUG)
-            self._cache_has_changed = True
+        self._invalidate_document_symbols_cache(relative_file_path)
         
         with self.open_file(relative_file_path) as file_buffer:
             file_buffer.version += 1
             
-        self.server.notify.did_change_text_document(
-            {
-                LSPConstants.TEXT_DOCUMENT: {
-                    LSPConstants.VERSION: file_buffer.version,
-                    LSPConstants.URI: file_buffer.uri,
-                },
-                LSPConstants.CONTENT_CHANGES: content_changes,
-            }
-        )
+            self.server.notify.did_change_text_document(
+                {
+                    LSPConstants.TEXT_DOCUMENT: {
+                        LSPConstants.VERSION: file_buffer.version,
+                        LSPConstants.URI: file_buffer.uri,
+                    },
+                    LSPConstants.CONTENT_CHANGES: content_changes,
+                }
+            )
 
     def insert_text_at_position(
         self, relative_file_path: str, line: int, column: int, text_to_be_inserted: str
@@ -792,6 +798,9 @@ class LanguageServer:
                 json.loads(json_repr)
                 for json_repr in set([json.dumps(item, sort_keys=True) for item in completions_list])
             ]
+            
+    def _get_cache_key(self, relative_file_path: str, include_body: bool) -> str:
+        return f"{relative_file_path}-{include_body}"
 
     async def request_document_symbols(self, relative_file_path: str, include_body: bool = False) -> Tuple[List[multilspy_types.UnifiedSymbolInformation], List[multilspy_types.UnifiedSymbolInformation]]:
         """
@@ -810,7 +819,7 @@ class LanguageServer:
         self.logger.log(f"Requesting document symbols for {relative_file_path} for the first time", logging.DEBUG)
         # TODO: it's kinda dumb to not use the cache if include_body is False after include_body was True once
         #   Should be fixed in the future, it's a small performance optimization
-        cache_key = f"{relative_file_path}-{include_body}"
+        cache_key = self._get_cache_key(relative_file_path, include_body)
         with self.open_file(relative_file_path) as file_data:
             file_hash_and_result = self._document_symbols_cache.get(cache_key)
             if file_hash_and_result is not None:
