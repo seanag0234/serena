@@ -41,8 +41,14 @@ class Request:
         self._result_queue.put(Request.Result(error=err))
 
     def get_result(self) -> Result:
-        # TODO could add timeout
-        return self._result_queue.get()
+            import queue
+            try:
+                # Add timeout to prevent indefinite blocking on unresponsive language servers
+                return self._result_queue.get(timeout=30.0)
+            except queue.Empty:
+                # Timeout occurred - language server didn't respond in time
+                raise TimeoutError(f"Language server did not respond within 30 seconds")
+
 
 
 class SolidLanguageServerHandler:

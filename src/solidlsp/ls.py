@@ -1532,23 +1532,42 @@ class SolidLanguageServer(ABC):
         """
         return Path(self.repository_root_path) / ".serena" / "cache" / self.language_id / "document_symbols_cache_v20-05-25.pkl"
 
-    def index_repository(self, progress_bar: bool = True, save_after_n_files: int = 10) -> None:
-        """Will go through the entire repository and "index" all files, meaning save their symbols to the cache.
+    def index_repository(self, progress_bar: bool = True, save_after_n_files: int = 100) -> None:
+            """Will go through the entire repository and "index" all files, meaning save their symbols to the cache.
+    
+            :param progress_bar: Whether to show a progress bar while indexing the repository.
+            :param save_after_n_files: How many files to process before saving a checkpoint of the cache.
+            """
+            parsed_files = self.request_parsed_files()
+            files_processed = 0
+            failed_files = []
+            pbar = tqdm.tqdm(parsed_files, disable=not progress_bar)
+            for relative_file_path in pbar:
+                pbar.set_description(f"Indexing ({os.path.basename(relative_file_path)})")
+                try:
+                    # For indexing, we only need symbols without body (much faster)
+                    self.request_document_symbols(relative_file_path, include_body=False)
+                    files_processed += 1
+                    if files_processed % save_after_n_files == 0:
+                        self.save_cache()
+                except Exception as e:
+                    # Log the error but continue indexing other files
+                    self.logger.log(f"Failed to index {relative_file_path}: {str(e)}", logging.WARNING)
+                    failed_files.append(relative_file_path)
+                    # Still count as processed for cache saving purposes
+                    files_processed += 1
+                    if files_processed % save_after_n_files == 0:
+                        self.save_cache()
+            
+            self.save_cache()
+            
+            if failed_files:
+                self.logger.log(f"Failed to index {len(failed_files)} files:", logging.WARNING)
+                for file in failed_files[:10]:  # Show first 10 failures
+                    self.logger.log(f"  - {file}", logging.WARNING)
+                if len(failed_files) > 10:
+                    self.logger.log(f"  ... and {len(failed_files) - 10} more", logging.WARNING)
 
-        :param progress_bar: Whether to show a progress bar while indexing the repository.
-        :param save_after_n_files: How many files to process before saving a checkpoint of the cache.
-        """
-        parsed_files = self.request_parsed_files()
-        files_processed = 0
-        pbar = tqdm.tqdm(parsed_files, disable=not progress_bar)
-        for relative_file_path in pbar:
-            pbar.set_description(f"Indexing ({os.path.basename(relative_file_path)})")
-            self.request_document_symbols(relative_file_path, include_body=False)
-            self.request_document_symbols(relative_file_path, include_body=True)
-            files_processed += 1
-            if files_processed % save_after_n_files == 0:
-                self.save_cache()
-        self.save_cache()
 
     def save_cache(self):
         with self._cache_lock:
