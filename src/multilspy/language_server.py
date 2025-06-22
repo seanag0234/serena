@@ -1869,14 +1869,14 @@ class SyncLanguageServer:
         """
         Raise a [textDocument/documentSymbol](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_documentSymbol) request to the Language Server
         to find symbols in the given file. Wait for the response and return the result.
-
+    
         :param relative_file_path: The relative path of the file that has the symbols
         :param include_body: whether to include the body of the symbols in the result.
         :return: A list of symbols in the file, and a list of root symbols that represent the tree structure of the symbols. Each symbol in hierarchy starting from the roots has a children attribute.
         """
         result = asyncio.run_coroutine_threadsafe(
             self.language_server.request_document_symbols(relative_file_path, include_body), self.loop
-        ).result()
+        ).result(timeout=self.timeout)
         return result
 
     def request_full_symbol_tree(self, within_relative_path: str | None = None, include_body: bool = False) -> List[multilspy_types.UnifiedSymbolInformation]:
