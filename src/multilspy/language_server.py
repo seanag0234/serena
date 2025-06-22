@@ -1874,10 +1874,13 @@ class SyncLanguageServer:
         :param include_body: whether to include the body of the symbols in the result.
         :return: A list of symbols in the file, and a list of root symbols that represent the tree structure of the symbols. Each symbol in hierarchy starting from the roots has a children attribute.
         """
+        # Use a default timeout of 30 seconds if self.timeout is None
+        timeout = self.timeout if self.timeout is not None else 30.0
         result = asyncio.run_coroutine_threadsafe(
             self.language_server.request_document_symbols(relative_file_path, include_body), self.loop
-        ).result(timeout=self.timeout)
+        ).result(timeout=timeout)
         return result
+
 
     def request_full_symbol_tree(self, within_relative_path: str | None = None, include_body: bool = False) -> List[multilspy_types.UnifiedSymbolInformation]:
         """

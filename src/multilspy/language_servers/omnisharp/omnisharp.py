@@ -402,7 +402,15 @@ class OmniSharp(LanguageServer):
             ):
                 self.references_available.set()
 
-            await self.definition_available.wait()
-            await self.references_available.wait()
+            # Wait for capabilities with timeout to prevent indefinite hangs
+            try:
+                await asyncio.wait_for(self.definition_available.wait(), timeout=30.0)
+            except asyncio.TimeoutError:
+                self.logger.log("Timeout waiting for definition capability from OmniSharp", logging.WARNING)
+            
+            try:
+                await asyncio.wait_for(self.references_available.wait(), timeout=30.0)
+            except asyncio.TimeoutError:
+                self.logger.log("Timeout waiting for references capability from OmniSharp", logging.WARNING)
 
             yield self
