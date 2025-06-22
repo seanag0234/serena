@@ -1597,7 +1597,7 @@ class LanguageServer:
         """
         return Path(self.repository_root_path) / ".serena" / "cache" / self.language_id / "document_symbols_cache_v20-05-25.pkl"
 
-    async def index_repository(self, progress_bar: bool = True, save_after_n_files: int = 10) -> None:
+    async def index_repository(self, progress_bar: bool = True, save_after_n_files: int = 100) -> None:
         """Will go through the entire repository and "index" all files, meaning save their symbols to the cache.
 
         :param progress_bar: Whether to show a progress bar while indexing the repository.
@@ -1608,8 +1608,8 @@ class LanguageServer:
         pbar = tqdm.tqdm(parsed_files, disable=not progress_bar)
         for relative_file_path in pbar:
             pbar.set_description(f"Indexing ({os.path.basename(relative_file_path)})")
+            # For indexing, we only need symbols without body (much faster)
             await self.request_document_symbols(relative_file_path, include_body=False)
-            await self.request_document_symbols(relative_file_path, include_body=True)
             files_processed += 1
             if files_processed % save_after_n_files == 0:
                 self.save_cache()
@@ -2147,7 +2147,7 @@ class SyncLanguageServer:
         ).result(timeout=self.timeout)
         return result
 
-    def index_repository(self, progress_bar: bool = True, timeout: float | None = None, save_after_n_files: int = 10) -> None:
+    def index_repository(self, progress_bar: bool = True, timeout: float | None = None, save_after_n_files: int = 100) -> None:
         """
         Will go through the entire repository and "index" all files, meaning save their symbols to the cache.
 

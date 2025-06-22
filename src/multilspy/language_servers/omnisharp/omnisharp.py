@@ -84,7 +84,7 @@ class OmniSharp(LanguageServer):
                 str(os.getpid()),
                 "DotNet:enablePackageRestore=false",
                 "--loglevel",
-                "trace",
+                "info",  # Reduced logging overhead
                 "--plugin",
                 dll_path,
                 "FileOptions:SystemExcludeSearchPatterns:0=**/.git",
@@ -93,7 +93,7 @@ class OmniSharp(LanguageServer):
                 "FileOptions:SystemExcludeSearchPatterns:3=**/CVS",
                 "FileOptions:SystemExcludeSearchPatterns:4=**/.DS_Store",
                 "FileOptions:SystemExcludeSearchPatterns:5=**/Thumbs.db",
-                "RoslynExtensionsOptions:EnableAnalyzersSupport=true",
+                "RoslynExtensionsOptions:EnableAnalyzersSupport=false",  # Disable analyzers for better performance
                 "FormattingOptions:EnableEditorConfigSupport=true",
                 "RoslynExtensionsOptions:EnableImportCompletion=true",
                 "Sdk:IncludePrereleases=true",
@@ -257,11 +257,11 @@ class OmniSharp(LanguageServer):
                 {
                     "RoslynExtensionsOptions": {
                         "EnableDecompilationSupport": False,
-                        "EnableAnalyzersSupport": True,
+                        "EnableAnalyzersSupport": False,  # Disable for better performance
                         "EnableImportCompletion": True,
                         "EnableAsyncCompletion": False,
-                        "DocumentAnalysisTimeoutMs": 30000,
-                        "DiagnosticWorkersThreadCount": 18,
+                        "DocumentAnalysisTimeoutMs": 5000,  # Reduced timeout
+                        "DiagnosticWorkersThreadCount": 4,  # Reduced threads
                         "AnalyzeOpenDocumentsOnly": True,
                         "InlayHintsOptions": {
                             "EnableForParameters": False,
