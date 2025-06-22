@@ -147,7 +147,8 @@ class SolidLanguageServerHandler:
             env=child_proc_env,
             cwd=self.process_launch_info.cwd,
             start_new_session=self.start_independent_lsp_process,
-            shell=True
+            shell=True,
+            bufsize=0  # Use unbuffered I/O for better real-time communication
         )
 
         # Check if process terminated immediately
@@ -285,21 +286,64 @@ class SolidLanguageServerHandler:
 
     @staticmethod
     def _read_bytes_from_process(process, stream, num_bytes):
-        """Read exactly num_bytes from process stdout"""
+        """Read exactly num_bytes from process stdout with timeout protection"""
+        import select
+        import time
+        
         if process.poll() is not None:
             # Process has terminated, check if we can still read
             pass
 
         data = b''
+        start_time = time.time()
+        timeout_seconds = 30.0  # 30 second timeout for reading bytes
+        bytes_remaining = num_bytes
+        
         while len(data) < num_bytes:
-            chunk = stream.read(num_bytes - len(data))
-            if not chunk:
+            # Check if we've exceeded the timeout
+            elapsed = time.time() - start_time
+            if elapsed > timeout_seconds:
+                raise TimeoutError(
+                    f"Timeout reading from language server after {elapsed:.1f}s. "
+                    f"Expected {num_bytes} bytes, got {len(data)} bytes. "
+                    f"Last {min(100, len(data))} bytes: {data[-100:] if data else 'none'}"
+                )
+            
+            # Use select to check if data is available with a short timeout
+            remaining_timeout = min(0.1, timeout_seconds - elapsed)
+            ready, _, _ = select.select([stream], [], [], remaining_timeout)
+            
+            if ready:
+                # Try to read the remaining bytes (or up to 8192 bytes at a time for efficiency)
+                chunk_size = min(bytes_remaining, 8192)
+                try:
+                    chunk = stream.read(chunk_size)
+                    if not chunk:
+                        if process.poll() is not None:
+                            raise EOFError(f"Process terminated. Expected {num_bytes} bytes, got {len(data)}")
+                        # No data available yet despite select saying there is
+                        time.sleep(0.01)
+                        continue
+                    data += chunk
+                    bytes_remaining -= len(chunk)
+                except IOError as e:
+                    if process.poll() is not None:
+                        raise EOFError(f"Process terminated with IO error. Expected {num_bytes} bytes, got {len(data)}. Error: {e}")
+                    raise
+            else:
+                # No data available yet
                 if process.poll() is not None:
-                    raise EOFError(f"Process terminated. Expected {num_bytes} bytes, got {len(data)}")
-                # Process still running but no data available yet
-                time.sleep(0.01)  # Small delay
-                continue
-            data += chunk
+                    # Process terminated - check if we can read any remaining data
+                    try:
+                        remaining = stream.read(bytes_remaining)
+                        if remaining:
+                            data += remaining
+                            if len(data) >= num_bytes:
+                                break
+                    except:
+                        pass
+                    raise EOFError(f"Process terminated while waiting for data. Expected {num_bytes} bytes, got {len(data)}")
+                
         return data
 
     def run_forever(self) -> bool:
@@ -314,17 +358,36 @@ class SolidLanguageServerHandler:
                     continue
                 try:
                     num_bytes = content_length(line)
-                except ValueError:
+                except ValueError as e:
+                    self._log(f"Invalid Content-Length header: {line}, error: {e}")
                     continue
                 if num_bytes is None:
                     continue
+                    
+                # Read remaining headers until empty line
+                headers = [line]
                 while line and line.strip():
                     line = self.process.stdout.readline()
+                    if line:
+                        headers.append(line)
                 if not line:
                     continue
-                body = self._read_bytes_from_process(self.process, self.process.stdout, num_bytes)
-
-                self._handle_body(body)
+                    
+                # Log the request details for debugging
+                if num_bytes > 10000:  # Log large requests
+                    self._log(f"Reading large response: {num_bytes} bytes")
+                    
+                try:
+                    body = self._read_bytes_from_process(self.process, self.process.stdout, num_bytes)
+                    self._handle_body(body)
+                except TimeoutError as e:
+                    self._log(f"Timeout reading response body: {e}")
+                    # Skip this message and continue
+                    continue
+                except Exception as e:
+                    self._log(f"Error reading response body: {e}")
+                    raise
+                    
         except (BrokenPipeError, ConnectionResetError):
             pass
         return self._received_shutdown

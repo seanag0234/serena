@@ -697,7 +697,9 @@ class SolidLanguageServer(ABC):
 
             num_retries = 0
             while response is None or (response["isIncomplete"] and num_retries < 30):
-                self.completions_available.wait()
+                if not self.completions_available.wait(timeout=30.0):
+                    self.logger.log("Timeout waiting for completions capability", logging.WARNING)
+                    break
                 response: Union[
                     List[LSPTypes.CompletionItem], LSPTypes.CompletionList, None
                 ] = self.server.send.completion(completion_params)
