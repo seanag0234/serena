@@ -391,5 +391,10 @@ class OmniSharp(SolidLanguageServer):
         ):
             self.references_available.set()
 
-        self.definition_available.wait()
-        self.references_available.wait()
+        # Wait for capabilities with timeout to prevent indefinite hangs
+        import time
+        if not self.definition_available.wait(timeout=30.0):
+            self.logger.log("Timeout waiting for definition capability from OmniSharp", logging.WARNING)
+        
+        if not self.references_available.wait(timeout=30.0):
+            self.logger.log("Timeout waiting for references capability from OmniSharp", logging.WARNING)

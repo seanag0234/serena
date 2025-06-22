@@ -711,8 +711,13 @@ def index_project(project: str, log_level: str = "INFO", timeout: float = 3600) 
     print(f"Indexing symbols in project {project}")
     ls = create_ls_for_project(project, log_level=log_level_int)
     with ls.start_server():
-        ls.index_repository(timeout=timeout)
+        # SolidLanguageServer doesn't support timeout parameter
+        if USE_SOLID_LSP:
+            ls.index_repository()
+        else:
+            ls.index_repository(timeout=timeout)
     print(f"Symbols saved to {ls.cache_path}")
+
 
 
 
