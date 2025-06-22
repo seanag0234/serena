@@ -1,9 +1,19 @@
 # Latest
-Status of the main branch. Changes prior to the next official version change will appear here.
 
-## Highlights
+Status of the `main` branch. Changes prior to the next official version change will appear here.
 
-### This version is a major change and improvement of Serena
+* **Reduce the use of asyncio to a minimum**, improving stability and reducing the need for workarounds
+   * Switch to newly developed fully synchronous LSP library `solidlsp` (derived from `multilspy`)
+   * Switch from fastapi (which uses asyncio) to Flask in the Serena dashboard
+   * The MCP server is the only asynchronous component now, which resolves cross-component loop contamination,
+     such that process isolation is no longer required.
+     Neither are non-graceful shutdowns on Windows.
+
+Fixes:
+* Fix `ExecuteShellCommandTool` and `GetCurrentConfigTool` hanging on Windows
+* Fix project activation by name via `--project` not working (was broken in previous release) 
+
+# 2025-06-20
 
 * **Overhaul and major improvement of editing tools!**
   This represents a very important change in Serena. Symbols can now be addressed by their `name_path` (including nested ones)
@@ -17,19 +27,16 @@ Status of the main branch. Changes prior to the next official version change wil
 * Possibility to index your project beforehand, accelerating Serena's tools.
 * Initial prompt for project supported (has to be added manually for the moment)
 * Massive performance improvement of pattern search tool
-* Fixed stability issues and deadlocks (see #170)
+* Use **process isolation** to fix stability issues and deadlocks (see #170). 
+  This uses separate process for the MCP server, the Serena agent and the dashboard in order to fix asyncio-related issues.
 
 # 2025-05-24
 
-## Highlights
-
-Important new feature: configurability of mode and context, allowing better integration in a variety of clients.
-See corresponding section in readme - Serena can now be integrated in IDE assistants in a more productive way.
-
-You can now also do things like switching to one-shot planning mode, ask to plan something (which will create a memory),
-then switch to interactive editing mode in the next conversation and work through the plan read from the memory.
-
-Also some improvements to prompts.
+* Important new feature: **configurability of mode and context**, allowing better integration in a variety of clients.
+  See corresponding section in readme - Serena can now be integrated in IDE assistants in a more productive way. 
+  You can now also do things like switching to one-shot planning mode, ask to plan something (which will create a memory),
+  then switch to interactive editing mode in the next conversation and work through the plan read from the memory.
+* Some improvements to prompts.
 
 # 2025-05-21
 
