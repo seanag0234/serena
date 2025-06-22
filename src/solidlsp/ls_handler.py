@@ -326,7 +326,22 @@ class SolidLanguageServerHandler:
                     chunk = stream.read(chunk_size)
                     if not chunk:
                         if process.poll() is not None:
-                            raise EOFError(f"Process terminated. Expected {num_bytes} bytes, got {len(data)}")
+                            # Try to get exit code and stderr for better diagnostics
+                            exit_code = process.returncode
+                            stderr_msg = ""
+                            try:
+                                if process.stderr:
+                                    # Try to read any error message from stderr
+                                    stderr_data = process.stderr.read(1024)  # Read up to 1KB of error
+                                    if stderr_data:
+                                        stderr_msg = f" stderr: {stderr_data.decode('utf-8', errors='replace')}"
+                            except:
+                                pass
+                            raise EOFError(
+                                f"Process terminated with exit code {exit_code}. "
+                                f"Expected {num_bytes} bytes, got {len(data)} bytes."
+                                f"{stderr_msg}"
+                            )
                         # No data available yet despite select saying there is
                         time.sleep(0.01)
                         continue
@@ -334,12 +349,17 @@ class SolidLanguageServerHandler:
                     bytes_remaining -= len(chunk)
                 except IOError as e:
                     if process.poll() is not None:
-                        raise EOFError(f"Process terminated with IO error. Expected {num_bytes} bytes, got {len(data)}. Error: {e}")
+                        exit_code = process.returncode
+                        raise EOFError(
+                            f"Process terminated with IO error (exit code {exit_code}). "
+                            f"Expected {num_bytes} bytes, got {len(data)} bytes. Error: {e}"
+                        )
                     raise
             else:
                 # No data available yet
                 if process.poll() is not None:
                     # Process terminated - check if we can read any remaining data
+                    exit_code = process.returncode
                     try:
                         remaining = stream.read(bytes_remaining)
                         if remaining:
@@ -348,9 +368,25 @@ class SolidLanguageServerHandler:
                                 break
                     except:
                         pass
-                    raise EOFError(f"Process terminated while waiting for data. Expected {num_bytes} bytes, got {len(data)}")
+                    
+                    # Check stderr for any error messages
+                    stderr_msg = ""
+                    try:
+                        if process.stderr:
+                            stderr_data = process.stderr.read(1024)
+                            if stderr_data:
+                                stderr_msg = f" stderr: {stderr_data.decode('utf-8', errors='replace')}"
+                    except:
+                        pass
+                        
+                    raise EOFError(
+                        f"Process terminated while waiting for data (exit code {exit_code}). "
+                        f"Expected {num_bytes} bytes, got {len(data)} bytes."
+                        f"{stderr_msg}"
+                    )
                 
         return data
+
 
     def run_forever(self) -> bool:
         """
