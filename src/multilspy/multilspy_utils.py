@@ -236,6 +236,8 @@ class DotnetVersion(str, Enum):
     V6 = "6"
     V7 = "7"
     V8 = "8"
+    V9 = "9"
+    V10 = "10"
     VMONO = "mono"
 
 
@@ -324,6 +326,12 @@ class PlatformUtils:
             
             # Check for supported versions in order of preference (latest first)
             for version_cmd_output in available_version_cmd_output:
+                if version_cmd_output.startswith("10"):
+                    return DotnetVersion.V10
+            for version_cmd_output in available_version_cmd_output:
+                if version_cmd_output.startswith("9"):
+                    return DotnetVersion.V9
+            for version_cmd_output in available_version_cmd_output:
                 if version_cmd_output.startswith("8"):
                     return DotnetVersion.V8
             for version_cmd_output in available_version_cmd_output:
@@ -337,7 +345,7 @@ class PlatformUtils:
                     return DotnetVersion.V4
             
             # If no supported version found, raise exception with all available versions
-            raise MultilspyException(f"No supported dotnet version found. Available versions: {', '.join(available_version_cmd_output)}. Supported versions: 4, 6, 7, 8")
+            raise MultilspyException(f"No supported dotnet version found. Available versions: {', '.join(available_version_cmd_output)}. Supported versions: 4, 6, 7, 8, 9, 10")
         except (FileNotFoundError, subprocess.CalledProcessError):
             try:
                 result = subprocess.run(["mono", "--version"], capture_output=True, check=True)
