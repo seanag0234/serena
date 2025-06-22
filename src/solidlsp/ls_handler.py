@@ -123,6 +123,12 @@ class SolidLanguageServerHandler:
         self._request_id_lock = threading.Lock()
         self._response_handlers_lock = threading.Lock()
         self._tasks_lock = threading.Lock()
+        
+        # Track abandoned request IDs to ignore late responses
+        self._abandoned_requests = set()
+        self._abandoned_requests_lock = threading.Lock()
+        # Clean up abandoned requests older than this many IDs
+        self._abandoned_requests_cleanup_threshold = 100
 
     def is_running(self) -> bool:
         """
@@ -472,14 +478,31 @@ class SolidLanguageServerHandler:
 
         self._send_payload(make_request(method, request_id, params))
 
-        self._log(f"Waiting for response to request {method} with params:\n{params}")
-        result = request.get_result()
+        self._log(f"Waiting for response to request {method} with params: {params}")
+        
+        try:
+            result = request.get_result()
+        except TimeoutError:
+            # Clean up the request handler on timeout to prevent desynchronization
+            with self._response_handlers_lock:
+                if request_id in self._response_handlers:
+                    self._response_handlers.pop(request_id)
+            # Track this as an abandoned request so we can ignore late responses
+            with self._abandoned_requests_lock:
+                self._abandoned_requests.add(request_id)
+                # Clean up old abandoned requests to prevent memory leak
+                if len(self._abandoned_requests) > self._abandoned_requests_cleanup_threshold:
+                    # Remove request IDs that are much older than current
+                    old_threshold = request_id - self._abandoned_requests_cleanup_threshold
+                    self._abandoned_requests = {rid for rid in self._abandoned_requests if rid > old_threshold}
+            self._log(f"Request {method} (id={request_id}) timed out and was cleaned up")
+            raise
 
         self._log(f"Processing result")
         if result.is_error():
-            raise MultilspyException(f"Could not process request {method} with params:\n{params}.\n  Language server error: {result.error}") from result.error
+            raise MultilspyException(f"Could not process request {method} with params: {params}. Language server error: {result.error}") from result.error
         
-        self._log(f"Returning non-error result, which is:\n{result.payload}")
+        self._log(f"Returning non-error result, which is: {result.payload}")
         return result.payload
 
     def _send_payload(self, payload: StringDict) -> None:
@@ -518,8 +541,21 @@ class SolidLanguageServerHandler:
         """
         Handle the response received from the server for a request, using the id to determine the request
         """
+        response_id = response["id"]
+        
+        # Check if this is a response for an abandoned request (timed out)
+        with self._abandoned_requests_lock:
+            if response_id in self._abandoned_requests:
+                self._abandoned_requests.remove(response_id)
+                self._log(f"Ignoring late response for abandoned request {response_id}")
+                return
+        
         with self._response_handlers_lock:
-            request = self._response_handlers.pop(response["id"])
+            request = self._response_handlers.pop(response_id, None)
+            
+        if request is None:
+            self._log(f"Received response for unknown request {response_id}")
+            return
 
         if "result" in response and "error" not in response:
             request.on_result(response["result"])
