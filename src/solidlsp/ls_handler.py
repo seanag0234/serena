@@ -5,16 +5,29 @@ import os
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from queue import Queue
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 import psutil
 
 from multilspy.lsp_protocol_handler.lsp_requests import LspNotification
 from multilspy.lsp_protocol_handler.lsp_types import ErrorCodes
-from multilspy.lsp_protocol_handler.server import ProcessLaunchInfo, StringDict, content_length, ENCODING, Error, MessageType, \
-    make_notification, PayloadLike, make_response, make_error_response, make_request, create_message
+from multilspy.lsp_protocol_handler.server import (
+    ENCODING,
+    Error,
+    MessageType,
+    PayloadLike,
+    ProcessLaunchInfo,
+    StringDict,
+    content_length,
+    create_message,
+    make_error_response,
+    make_notification,
+    make_request,
+    make_response,
+)
 from multilspy.multilspy_exceptions import MultilspyException
 from solidlsp.lsp_request import SolidLspRequest
 
@@ -25,8 +38,8 @@ class Request:
 
     @dataclass
     class Result:
-        payload: Optional[PayloadLike] = None
-        error: Optional[Error] = None
+        payload: PayloadLike | None = None
+        error: Error | None = None
 
         def is_error(self) -> bool:
             return self.error is not None
@@ -87,13 +100,14 @@ class SolidLanguageServerHandler:
         language server process in an independent process group. Default is `True`. Setting it to
         `False` means that the language server process will be in the same process group as the
         the current process, and any SIGINT and SIGTERM signals will be sent to both processes.
+
     """
 
     def __init__(
-            self,
-            process_launch_info: ProcessLaunchInfo,
-            logger: Optional[Callable[[str, str, StringDict | str], None]] = None,
-            start_independent_lsp_process=True,
+        self,
+        process_launch_info: ProcessLaunchInfo,
+        logger: Callable[[str, str, StringDict | str], None] | None = None,
+        start_independent_lsp_process=True,
     ) -> None:
         """
         Params:
@@ -109,7 +123,7 @@ class SolidLanguageServerHandler:
         self._received_shutdown = False
 
         self.request_id = 1
-        self._response_handlers: Dict[Any, Request] = {}
+        self._response_handlers: dict[Any, Request] = {}
         self.on_request_handlers = {}
         self.on_notification_handlers = {}
         self.logger = logger
@@ -123,7 +137,7 @@ class SolidLanguageServerHandler:
         self._request_id_lock = threading.Lock()
         self._response_handlers_lock = threading.Lock()
         self._tasks_lock = threading.Lock()
-        
+
         # Track abandoned request IDs to ignore late responses
         self._abandoned_requests = set()
         self._abandoned_requests_lock = threading.Lock()
@@ -162,7 +176,7 @@ class SolidLanguageServerHandler:
             log.error("Language server has already terminated/could not be started")
             # Process has already terminated
             stderr_data = self.process.stderr.read()
-            error_message = stderr_data.decode('utf-8', errors='replace')
+            error_message = stderr_data.decode("utf-8", errors="replace")
             raise RuntimeError(f"Process terminated immediately with code {self.process.returncode}. Error: {error_message}")
 
         # start threads to read stdout and stderr of the process
@@ -295,16 +309,16 @@ class SolidLanguageServerHandler:
         """Read exactly num_bytes from process stdout with timeout protection"""
         import select
         import time
-        
+
         if process.poll() is not None:
             # Process has terminated, check if we can still read
             pass
 
-        data = b''
+        data = b""
         start_time = time.time()
         timeout_seconds = 30.0  # 30 second timeout for reading bytes
         bytes_remaining = num_bytes
-        
+
         while len(data) < num_bytes:
             # Check if we've exceeded the timeout
             elapsed = time.time() - start_time
@@ -314,11 +328,11 @@ class SolidLanguageServerHandler:
                     f"Expected {num_bytes} bytes, got {len(data)} bytes. "
                     f"Last {min(100, len(data))} bytes: {data[-100:] if data else 'none'}"
                 )
-            
+
             # Use select to check if data is available with a short timeout
             remaining_timeout = min(0.1, timeout_seconds - elapsed)
             ready, _, _ = select.select([stream], [], [], remaining_timeout)
-            
+
             if ready:
                 # Try to read the remaining bytes (or up to 8192 bytes at a time for efficiency)
                 chunk_size = min(bytes_remaining, 8192)
@@ -368,7 +382,7 @@ class SolidLanguageServerHandler:
                                 break
                     except:
                         pass
-                    
+
                     # Check stderr for any error messages
                     stderr_msg = ""
                     try:
@@ -378,13 +392,13 @@ class SolidLanguageServerHandler:
                                 stderr_msg = f" stderr: {stderr_data.decode('utf-8', errors='replace')}"
                     except:
                         pass
-                        
+
                     raise EOFError(
                         f"Process terminated while waiting for data (exit code {exit_code}). "
                         f"Expected {num_bytes} bytes, got {len(data)} bytes."
                         f"{stderr_msg}"
                     )
-                
+
         return data
 
 
@@ -405,7 +419,7 @@ class SolidLanguageServerHandler:
                     continue
                 if num_bytes is None:
                     continue
-                    
+
                 # Read remaining headers until empty line
                 headers = [line]
                 while line and line.strip():
@@ -414,11 +428,11 @@ class SolidLanguageServerHandler:
                         headers.append(line)
                 if not line:
                     continue
-                    
+
                 # Log the request details for debugging
                 if num_bytes > 10000:  # Log large requests
                     self._log(f"Reading large response: {num_bytes} bytes")
-                    
+
                 try:
                     body = self._read_bytes_from_process(self.process, self.process.stdout, num_bytes)
                     self._handle_body(body)
@@ -429,7 +443,7 @@ class SolidLanguageServerHandler:
                 except Exception as e:
                     self._log(f"Error reading response body: {e}")
                     raise
-                    
+
         except (BrokenPipeError, ConnectionResetError):
             pass
         return self._received_shutdown
@@ -443,7 +457,7 @@ class SolidLanguageServerHandler:
                 line = self.process.stderr.readline()
                 if not line:
                     continue
-                self._log("LSP stderr: " + line.decode(ENCODING, errors='replace'))
+                self._log("LSP stderr: " + line.decode(ENCODING, errors="replace"))
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -453,7 +467,7 @@ class SolidLanguageServerHandler:
         """
         try:
             self._receive_payload(json.loads(body))
-        except IOError as ex:
+        except OSError as ex:
             self._log(f"malformed {ENCODING}: {ex}")
         except UnicodeDecodeError as ex:
             self._log(f"malformed {ENCODING}: {ex}")
@@ -479,7 +493,7 @@ class SolidLanguageServerHandler:
         except Exception as err:
             self._log(f"Error handling server payload: {err}")
 
-    def send_notification(self, method: str, params: Optional[dict] = None) -> None:
+    def send_notification(self, method: str, params: dict | None = None) -> None:
         """
         Send notification pertaining to the given method to the server with the given parameters
         """
@@ -498,7 +512,7 @@ class SolidLanguageServerHandler:
         # Use lock to prevent race conditions on tasks and task_counter
         self._send_payload(make_error_response(request_id, err))
 
-    def send_request(self, method: str, params: Optional[dict] = None) -> PayloadLike:
+    def send_request(self, method: str, params: dict | None = None) -> PayloadLike:
         """
         Send request to the server, register the request id, and wait for the response
         """
@@ -515,7 +529,7 @@ class SolidLanguageServerHandler:
         self._send_payload(make_request(method, request_id, params))
 
         self._log(f"Waiting for response to request {method} with params: {params}")
-        
+
         try:
             result = request.get_result()
         except TimeoutError:
@@ -534,10 +548,12 @@ class SolidLanguageServerHandler:
             self._log(f"Request {method} (id={request_id}) timed out and was cleaned up")
             raise
 
-        self._log(f"Processing result")
+        self._log("Processing result")
         if result.is_error():
-            raise MultilspyException(f"Could not process request {method} with params: {params}. Language server error: {result.error}") from result.error
-        
+            raise MultilspyException(
+                f"Could not process request {method} with params: {params}. Language server error: {result.error}"
+            ) from result.error
+
         self._log(f"Returning non-error result, which is: {result.payload}")
         return result.payload
 
@@ -578,17 +594,17 @@ class SolidLanguageServerHandler:
         Handle the response received from the server for a request, using the id to determine the request
         """
         response_id = response["id"]
-        
+
         # Check if this is a response for an abandoned request (timed out)
         with self._abandoned_requests_lock:
             if response_id in self._abandoned_requests:
                 self._abandoned_requests.remove(response_id)
                 self._log(f"Ignoring late response for abandoned request {response_id}")
                 return
-        
+
         with self._response_handlers_lock:
             request = self._response_handlers.pop(response_id, None)
-            
+
         if request is None:
             self._log(f"Received response for unknown request {response_id}")
             return
@@ -613,7 +629,7 @@ class SolidLanguageServerHandler:
                 request_id,
                 Error(
                     ErrorCodes.MethodNotFound,
-                    "method '{}' not handled on client.".format(method),
+                    f"method '{method}' not handled on client.",
                 ),
             )
             return
