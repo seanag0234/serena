@@ -719,8 +719,6 @@ def index_project(project: str, log_level: str = "INFO", timeout: float = 3600) 
     print(f"Symbols saved to {ls.cache_path}")
 
 
-
-
 class SerenaAgent:
     def __init__(
         self,

@@ -156,7 +156,7 @@ class OmniSharp(SolidLanguageServer):
             DotnetVersion.V7,
             DotnetVersion.V8,
             DotnetVersion.V9,
-            DotnetVersion.V10
+            DotnetVersion.V10,
         ], "Only dotnet versions 6, 7, 8, 9, and 10 are supported in multilspy at the moment"
 
         # TODO: Do away with this assumption
@@ -374,7 +374,6 @@ class OmniSharp(SolidLanguageServer):
             self.references_available.set()
 
         # Wait for capabilities with timeout to prevent indefinite hangs
-        import time
         if not self.definition_available.wait(timeout=30.0):
             self.logger.log("Timeout waiting for definition capability from OmniSharp", logging.WARNING)
 

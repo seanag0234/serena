@@ -54,14 +54,14 @@ class Request:
         self._result_queue.put(Request.Result(error=err))
 
     def get_result(self) -> Result:
-            import queue
-            try:
-                # Add timeout to prevent indefinite blocking on unresponsive language servers
-                return self._result_queue.get(timeout=30.0)
-            except queue.Empty:
-                # Timeout occurred - language server didn't respond in time
-                raise TimeoutError(f"Language server did not respond within 30 seconds")
+        import queue
 
+        try:
+            # Add timeout to prevent indefinite blocking on unresponsive language servers
+            return self._result_queue.get(timeout=30.0)
+        except queue.Empty as e:
+            # Timeout occurred - language server didn't respond in time
+            raise TimeoutError("Language server did not respond within 30 seconds") from e
 
 
 class SolidLanguageServerHandler:
@@ -168,7 +168,7 @@ class SolidLanguageServerHandler:
             cwd=self.process_launch_info.cwd,
             start_new_session=self.start_independent_lsp_process,
             shell=True,
-            bufsize=0  # Use unbuffered I/O for better real-time communication
+            bufsize=0,  # Use unbuffered I/O for better real-time communication
         )
 
         # Check if process terminated immediately
@@ -308,7 +308,6 @@ class SolidLanguageServerHandler:
     def _read_bytes_from_process(process, stream, num_bytes):
         """Read exactly num_bytes from process stdout with timeout protection"""
         import select
-        import time
 
         if process.poll() is not None:
             # Process has terminated, check if we can still read
@@ -361,13 +360,13 @@ class SolidLanguageServerHandler:
                         continue
                     data += chunk
                     bytes_remaining -= len(chunk)
-                except IOError as e:
+                except OSError as e:
                     if process.poll() is not None:
                         exit_code = process.returncode
                         raise EOFError(
                             f"Process terminated with IO error (exit code {exit_code}). "
                             f"Expected {num_bytes} bytes, got {len(data)} bytes. Error: {e}"
-                        )
+                        ) from e
                     raise
             else:
                 # No data available yet
@@ -400,7 +399,6 @@ class SolidLanguageServerHandler:
                     )
 
         return data
-
 
     def run_forever(self) -> bool:
         """
