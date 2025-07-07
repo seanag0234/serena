@@ -274,6 +274,7 @@ class SolidLanguageServer(ABC):
             process_launch_info,
             logger=logging_fn,
             start_independent_lsp_process=config.start_independent_lsp_process,
+            request_timeout=None,  # Will be set later via set_request_timeout
         )
 
         # Set up the pathspec matcher for the ignored paths

@@ -170,16 +170,18 @@ def create_ls_for_project(
 @click.command()
 @click.argument("project", type=click.Path(exists=True), required=False, default=os.getcwd())
 @click.option("--log-level", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]), default="WARNING")
-def index_project(project: str, log_level: str = "INFO") -> None:
+@click.option("--timeout", type=float, default=None, help="Timeout in seconds for indexing operations (default: no timeout)")
+def index_project(project: str, log_level: str = "INFO", timeout: float | None = None) -> None:
     """
     Index a project by saving the symbols of files to Serena's language server cache.
 
     :param project: the project to index. By default, the current working directory is used.
+    :param timeout: Timeout in seconds for indexing operations. If None, no timeout is used.
     """
     log_level_int = logging.getLevelNamesMapping()[log_level.upper()]
     project = os.path.abspath(project)
     print(f"Indexing symbols in project {project}")
-    ls = create_ls_for_project(project, log_level=log_level_int)
+    ls = create_ls_for_project(project, log_level=log_level_int, ls_timeout=timeout)
     with ls.start_server():
         ls.index_repository()
     print(f"Symbols saved to {ls.cache_path}")
