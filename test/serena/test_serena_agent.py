@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 
@@ -6,7 +7,8 @@ import pytest
 
 import test.solidlsp.clojure as clj
 from serena.agent import SerenaAgent
-from serena.config.serena_config import Project, ProjectConfig, SerenaConfig
+from serena.config.serena_config import ProjectConfig, SerenaConfig
+from serena.project import Project
 from serena.tools import FindReferencingSymbolsTool, FindSymbolTool
 from solidlsp.ls_config import Language
 from test.conftest import get_repo_path
@@ -45,7 +47,7 @@ def serena_config():
             )
             test_projects.append(project)
 
-    config = SerenaConfig(gui_log_window_enabled=False, web_dashboard=False)
+    config = SerenaConfig(gui_log_window_enabled=False, web_dashboard=False, log_level=logging.ERROR)
     config.projects = test_projects
     return config
 

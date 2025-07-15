@@ -32,6 +32,8 @@ dependencies = [
   "docstring_parser>=0.16",
   "joblib>=1.5.1",
   "tqdm>=4.67.1",
+  "tiktoken>=0.9.0",
+  "anthropic>=0.54.0",
 ]
 
 [project.scripts]
@@ -46,7 +48,7 @@ dev = [
   "black[jupyter]>=23.7.0",
   "jinja2",
   # In version 1.0.4 we get a NoneType error related to some config conversion (yml_analytics is None and should be a list)
-  "mypy>=1.4.1",
+  "mypy>=1.16.1",
   "poethepoet>=0.20.0",
   "pytest>=8.0.2",
   "pytest-xdist>=3.5.0",
@@ -225,6 +227,7 @@ ignore = [
   "B904",     # forces use of raise from other_exception
   "RUF012",   # forbids mutable attributes as ClassVar
   "SIM117",   # forbids nested with statements
+  "C400",     # wants to unnecessarily force use of list comprehension
 ]
 unfixable = ["F841", "F601", "F602", "B018"]
 extend-fixable = ["F401", "B905", "W291"]
