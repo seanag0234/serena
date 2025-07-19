@@ -15,22 +15,20 @@ from logging import Logger
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, Union
 
-import click
 from sensai.util import logging
 from sensai.util.logging import LogTime
-from tqdm import tqdm
 
 from serena import serena_version
 from serena.analytics import RegisteredTokenCountEstimator, ToolUsageStats
-from serena.config.context_mode import SerenaAgentContext, SerenaAgentMode
-from serena.config.serena_config import SerenaConfig, ToolSet, get_serena_managed_dir
+from serena.config.context_mode import RegisteredContext, SerenaAgentContext, SerenaAgentMode
+from serena.config.serena_config import SerenaConfig, ToolInclusionDefinition, ToolSet, get_serena_managed_in_project_dir
 from serena.constants import (
     SERENA_LOG_FORMAT,
 )
 from serena.dashboard import MemoryLogHandler, SerenaDashboardAPI
 from serena.project import Project
 from serena.prompt_factory import SerenaPromptFactory
-from serena.tools import Tool, ToolRegistry
+from serena.tools import ActivateProjectTool, Tool, ToolRegistry
 from solidlsp import SolidLanguageServer
 
 if TYPE_CHECKING:
@@ -64,7 +62,7 @@ class LinesRead:
 
 class MemoriesManager:
     def __init__(self, project_root: str):
-        self._memory_dir = Path(get_serena_managed_dir(project_root)) / "memories"
+        self._memory_dir = Path(get_serena_managed_in_project_dir(project_root)) / "memories"
         self._memory_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_memory_file_path(self, name: str) -> Path:
@@ -93,38 +91,6 @@ class MemoriesManager:
         memory_file_path = self._get_memory_file_path(name)
         memory_file_path.unlink()
         return f"Memory {name} deleted."
-
-
-@click.command()
-@click.argument("project", type=click.Path(exists=True), required=False, default=os.getcwd())
-@click.option("--log-level", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]), default="WARNING")
-@click.option("--timeout", type=float, default=None, help="Timeout in seconds for indexing operations (default: no timeout)")
-def index_project(project: str, log_level: str = "INFO", timeout: float | None = None) -> None:
-    """
-    Index a project by saving the symbols of files to Serena's language server cache.
-
-    :param project: the project to index. By default, the current working directory is used.
-    :param timeout: Timeout in seconds for indexing operations. If None, no timeout is used.
-    """
-    log_level_int = logging.getLevelNamesMapping()[log_level.upper()]
-    project_instance = Project.load(os.path.abspath(project))
-    print(f"Indexing symbols in project {project}")
-    ls = project_instance.create_language_server(log_level=log_level_int)
-    save_after_n_files = 10
-    with ls.start_server():
-        parsed_files = project_instance.gather_source_files()
-        files_processed = 0
-        pbar = tqdm(parsed_files, disable=False)
-        for relative_file_path in pbar:
-            pbar.set_description(f"Indexing ({os.path.basename(relative_file_path)})")
-            ls.request_document_symbols(relative_file_path, include_body=False)
-            ls.request_document_symbols(relative_file_path, include_body=True)
-            files_processed += 1
-            if files_processed % save_after_n_files == 0:
-                ls.save_cache()
-        ls.save_cache()
-    print(f"Symbols saved to {ls.cache_path}")
-
 
 class SerenaAgent:
     def __init__(
@@ -209,9 +175,12 @@ class SerenaAgent:
 
         # determine the base toolset defining the set of exposed tools (which e.g. the MCP shall see),
         # limited by the Serena config, the context (which is fixed for the session) and JetBrains mode
-        tool_inclusion_definitions = [self.serena_config, self._context]
+        tool_inclusion_definitions: list[ToolInclusionDefinition] = [self.serena_config, self._context]
+        if self._context.name == RegisteredContext.IDE_ASSISTANT.value:
+            tool_inclusion_definitions.extend(self._ide_context_tool_inclusion_definitions(project))
         if self.serena_config.jetbrains:
             tool_inclusion_definitions.append(SerenaAgentMode.from_name_internal("jetbrains"))
+
         self._base_tool_set = ToolSet.default().apply(*tool_inclusion_definitions)
         self._exposed_tools = {tc: t for tc, t in self._all_tools.items() if self._base_tool_set.includes_name(t.get_name())}
         log.info(f"Number of exposed tools: {len(self._exposed_tools)}")
@@ -245,11 +214,29 @@ class SerenaAgent:
         if project is not None:
             try:
                 self.activate_project_from_path_or_name(project)
-            except ProjectNotFoundError as e:
-                log.error(
-                    f"Error activating project '{project}': {e}; Note that out-of-project configurations were migrated. "
-                    "You should now pass either --project <project_name> or --project <project_root>."
-                )
+            except Exception as e:
+                log.error(f"Error activating project '{project}' at startup: {e}")
+
+    def _ide_context_tool_inclusion_definitions(self, project_root_or_name: str | None) -> list[ToolInclusionDefinition]:
+        """
+        In the IDE assistant context, the agent is assumed to work on a single project, and we thus
+        want to apply that project's tool exclusions/inclusions from the get-go, limiting the set
+        of tools that will be exposed to the client.
+        So if the project exists, we apply all the aforementioned exclusions.
+
+        :param project_root_or_name: the project root path or project name
+        :return:
+        """
+        tool_inclusion_definitions = []
+        if project_root_or_name is not None:
+            # Note: Auto-generation is disabled, because the result must be returned instantaneously
+            #   (project generation could take too much time), so as not to delay MCP server startup
+            #   and provide responses to the client immediately.
+            project = self.load_project_from_path_or_name(project_root_or_name, autogenerate=False)
+            if project is not None:
+                tool_inclusion_definitions.append(ToolInclusionDefinition(excluded_tools=[ActivateProjectTool.get_name_from_cls()]))
+                tool_inclusion_definitions.append(project.project_config)
+        return tool_inclusion_definitions
 
     def record_tool_usage_if_enabled(self, input_kwargs: dict, tool_result: str | dict, tool: Tool) -> None:
         """
@@ -413,36 +400,41 @@ class SerenaAgent:
         if self._project_activation_callback is not None:
             self._project_activation_callback()
 
-    def activate_project_from_path_or_name(self, project_root_or_name: str) -> tuple[Project, bool, bool]:
+    def load_project_from_path_or_name(self, project_root_or_name: str, autogenerate: bool) -> Project | None:
         """
-        Activate a project from a path or a name.
-        If the project was already registered, it will just be activated. If it was not registered,
-        the project will be registered and activated. After that, the project can be activated again
-        by name (not just by path).
-        :return: a tuple of the project instance and two booleans indicating if a new project was added and if a new project configuration for the
-            added project was generated.
+        Get a project instance from a path or a name.
+
+        :param project_root_or_name: the path to the project root or the name of the project
+        :param autogenerate: whether to autogenerate the project for the case where first argument is a directory
+            which does not yet contain a Serena project configuration file
+        :return: the project instance if it was found/could be created, None otherwise
         """
-        new_project_generated = False
-        new_project_config_generated = False
         project_instance: Project | None = self.serena_config.get_project(project_root_or_name)
         if project_instance is not None:
             log.info(f"Found registered project {project_instance.project_name} at path {project_instance.project_root}.")
-        else:
-            if not os.path.isdir(project_root_or_name):
-                raise ProjectNotFoundError(
-                    f"Project '{project_root_or_name}' not found: Not a valid project name or directory. "
-                    f"Existing project names: {self.serena_config.project_names}"
-                )
-            project_instance, new_project_config_generated = self.serena_config.add_project_from_path(project_root_or_name)
-            new_project_generated = True
+        elif autogenerate and os.path.isdir(project_root_or_name):
+            project_instance = self.serena_config.add_project_from_path(project_root_or_name)
             log.info(f"Added new project {project_instance.project_name} for path {project_instance.project_root}.")
-            if new_project_config_generated:
-                log.info(
-                    f"Note: A new project configuration with language {project_instance.project_config.language.value} "
-                    f"was autogenerated since no project configuration was found in {project_root_or_name}."
-                )
+        return project_instance
+
+    def activate_project_from_path_or_name(self, project_root_or_name: str) -> Project:
+        """
+        Activate a project from a path or a name.
+        If the project was already registered, it will just be activated.
+        If the argument is a path at which no Serena project previously existed, the project will be created beforehand.
+        Raises ProjectNotFoundError if the project could neither be found nor created.
+
+        :return: a tuple of the project instance and a Boolean indicating whether the project was newly
+            created
+        """
+        project_instance: Project | None = self.load_project_from_path_or_name(project_root_or_name, autogenerate=True)
+        if project_instance is None:
+            raise ProjectNotFoundError(
+                f"Project '{project_root_or_name}' not found: Not a valid project name or directory. "
+                f"Existing project names: {self.serena_config.project_names}"
+            )
         self._activate_project(project_instance)
-        return project_instance, new_project_generated, new_project_config_generated
+        return project_instance
 
     def get_active_tool_classes(self) -> list[type["Tool"]]:
         """
