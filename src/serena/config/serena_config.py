@@ -7,6 +7,7 @@ import shutil
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Self, TypeVar
@@ -14,13 +15,14 @@ from typing import TYPE_CHECKING, Any, Optional, Self, TypeVar
 import yaml
 from ruamel.yaml.comments import CommentedMap
 from sensai.util import logging
+from sensai.util.logging import LogTime, datetime_tag
 from sensai.util.string import ToStringMixin
 
 from serena.constants import (
     DEFAULT_ENCODING,
     PROJECT_TEMPLATE_FILE,
     REPO_ROOT,
-    SELENA_CONFIG_TEMPLATE_FILE,
+    SERENA_CONFIG_TEMPLATE_FILE,
     SERENA_MANAGED_DIR_IN_HOME,
     SERENA_MANAGED_DIR_NAME,
 )
@@ -29,6 +31,7 @@ from serena.util.inspection import determine_programming_language_composition
 from solidlsp.ls_config import Language
 
 from ..analytics import RegisteredTokenCountEstimator
+from ..util.class_decorators import singleton
 
 if TYPE_CHECKING:
     from ..project import Project
@@ -36,6 +39,30 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 DEFAULT_TOOL_TIMEOUT: float = 240
+
+
+@singleton
+class SerenaPaths:
+    """
+    Provides paths to various Serena-related directories and files.
+    """
+
+    def __init__(self) -> None:
+        self.user_config_dir: str = SERENA_MANAGED_DIR_IN_HOME
+        """
+        the path to the user's Serena configuration directory, which is typically ~/.serena
+        """
+
+    def get_next_log_file_path(self, prefix: str) -> str:
+        """
+        :param prefix: the filename prefix indicating the type of the log file
+        :return: the full path to the log file to use
+        """
+        log_dir = os.path.join(self.user_config_dir, "logs", datetime.now().strftime("%Y-%m-%d"))
+        os.makedirs(log_dir, exist_ok=True)
+        return os.path.join(log_dir, prefix + "_" + datetime_tag() + ".txt")
+
+    # TODO: Paths from constants.py should be moved here
 
 
 class ToolSet:
@@ -163,30 +190,31 @@ class ProjectConfig(ToolInclusionDefinition, ToStringMixin):
         project_root = Path(project_root).resolve()
         if not project_root.exists():
             raise FileNotFoundError(f"Project root not found: {project_root}")
-        project_name = project_name or project_root.name
-        if project_language is None:
-            language_composition = determine_programming_language_composition(str(project_root))
-            if len(language_composition) == 0:
-                raise ValueError(
-                    f"No source files found in {project_root}\n\n"
-                    f"To use Serena with this project, you need to either:\n"
-                    f"1. Add source files in one of the supported languages (Python, JavaScript/TypeScript, Java, C#, Rust, Go, Ruby, C++, PHP)\n"
-                    f"2. Create a project configuration file manually at:\n"
-                    f"   {os.path.join(project_root, cls.rel_path_to_project_yml())}\n\n"
-                    f"Example project.yml:\n"
-                    f"  project_name: {project_name}\n"
-                    f"  language: python  # or typescript, java, csharp, rust, go, ruby, cpp, php\n"
-                )
-            # find the language with the highest percentage
-            dominant_language = max(language_composition.keys(), key=lambda lang: language_composition[lang])
-        else:
-            dominant_language = project_language.value
-        config_with_comments = load_yaml(PROJECT_TEMPLATE_FILE, preserve_comments=True)
-        config_with_comments["project_name"] = project_name
-        config_with_comments["language"] = dominant_language
-        if save_to_disk:
-            save_yaml(str(project_root / cls.rel_path_to_project_yml()), config_with_comments, preserve_comments=True)
-        return cls._from_dict(config_with_comments)
+        with LogTime("Project configuration auto-generation", logger=log):
+            project_name = project_name or project_root.name
+            if project_language is None:
+                language_composition = determine_programming_language_composition(str(project_root))
+                if len(language_composition) == 0:
+                    raise ValueError(
+                        f"No source files found in {project_root}\n\n"
+                        f"To use Serena with this project, you need to either:\n"
+                        f"1. Add source files in one of the supported languages (Python, JavaScript/TypeScript, Java, C#, Rust, Go, Ruby, C++, PHP, Swift, Elixir, Terraform, Bash)\n"
+                        f"2. Create a project configuration file manually at:\n"
+                        f"   {os.path.join(project_root, cls.rel_path_to_project_yml())}\n\n"
+                        f"Example project.yml:\n"
+                        f"  project_name: {project_name}\n"
+                        f"  language: python  # or typescript, java, csharp, rust, go, ruby, cpp, php, swift, elixir, terraform, bash\n"
+                    )
+                # find the language with the highest percentage
+                dominant_language = max(language_composition.keys(), key=lambda lang: language_composition[lang])
+            else:
+                dominant_language = project_language.value
+            config_with_comments = load_yaml(PROJECT_TEMPLATE_FILE, preserve_comments=True)
+            config_with_comments["project_name"] = project_name
+            config_with_comments["language"] = dominant_language
+            if save_to_disk:
+                save_yaml(str(project_root / cls.rel_path_to_project_yml()), config_with_comments, preserve_comments=True)
+            return cls._from_dict(config_with_comments)
 
     @classmethod
     def rel_path_to_project_yml(cls) -> str:
@@ -220,7 +248,7 @@ class ProjectConfig(ToolInclusionDefinition, ToStringMixin):
         )
 
     @classmethod
-    def load(cls, project_root: Path | str, autogenerate: bool = True) -> Self:
+    def load(cls, project_root: Path | str, autogenerate: bool = False) -> Self:
         """
         Load a ProjectConfig instance from the path to the project root.
         """
@@ -238,6 +266,54 @@ class ProjectConfig(ToolInclusionDefinition, ToStringMixin):
         return cls._from_dict(yaml_data)
 
 
+class RegisteredProject(ToStringMixin):
+    def __init__(self, project_root: str, project_config: "ProjectConfig", project_instance: Optional["Project"] = None) -> None:
+        """
+        Represents a registered project in the Serena configuration.
+
+        :param project_root: the root directory of the project
+        :param project_config: the configuration of the project
+        """
+        self.project_root = Path(project_root).resolve()
+        self.project_config = project_config
+        self._project_instance = project_instance
+
+    def _tostring_exclude_private(self) -> bool:
+        return True
+
+    @property
+    def project_name(self) -> str:
+        return self.project_config.project_name
+
+    @classmethod
+    def from_project_instance(cls, project_instance: "Project") -> "RegisteredProject":
+        return RegisteredProject(
+            project_root=project_instance.project_root,
+            project_config=project_instance.project_config,
+            project_instance=project_instance,
+        )
+
+    def matches_root_path(self, path: str | Path) -> bool:
+        """
+        Check if the given path matches the project root path.
+
+        :param path: the path to check
+        :return: True if the path matches the project root, False otherwise
+        """
+        return self.project_root == Path(path).resolve()
+
+    def get_project_instance(self) -> "Project":
+        """
+        Returns the project instance for this registered project, loading it if necessary.
+        """
+        if self._project_instance is None:
+            from ..project import Project
+
+            with LogTime(f"Loading project instance for {self}", logger=log):
+                self._project_instance = Project(project_root=str(self.project_root), project_config=self.project_config)
+        return self._project_instance
+
+
 @dataclass(kw_only=True)
 class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
     """
@@ -246,7 +322,7 @@ class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
     For testing purposes, it can also be instantiated directly with the desired parameters.
     """
 
-    projects: list["Project"] = field(default_factory=list)
+    projects: list[RegisteredProject] = field(default_factory=list)
     gui_log_window_enabled: bool = False
     log_level: int = logging.INFO
     trace_lsp_communication: bool = False
@@ -289,7 +365,7 @@ class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
         :param config_file_path: the path where the configuration file should be generated
         """
         log.info(f"Auto-generating Serena configuration file in {config_file_path}")
-        loaded_commented_yaml = load_yaml(SELENA_CONFIG_TEMPLATE_FILE, preserve_comments=True)
+        loaded_commented_yaml = load_yaml(SERENA_CONFIG_TEMPLATE_FILE, preserve_comments=True)
         save_yaml(config_file_path, loaded_commented_yaml, preserve_comments=True)
 
     @classmethod
@@ -317,8 +393,6 @@ class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
         """
         Static constructor to create SerenaConfig from the configuration file
         """
-        from ..project import Project
-
         config_file_path = cls._determine_config_file_path()
 
         # create the configuration file from the template if necessary
@@ -355,7 +429,11 @@ class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
                 if path is None:
                     continue
                 num_project_migrations += 1
-            project = Project.load(path)
+            project_config = ProjectConfig.load(path)
+            project = RegisteredProject(
+                project_root=str(path),
+                project_config=project_config,
+            )
             instance.projects.append(project)
 
         # set other configuration parameters
@@ -411,7 +489,7 @@ class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
 
     @cached_property
     def project_paths(self) -> list[str]:
-        return sorted(project.project_root for project in self.projects)
+        return sorted(str(project.project_root) for project in self.projects)
 
     @cached_property
     def project_names(self) -> list[str]:
@@ -424,7 +502,7 @@ class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
             if project.project_config.project_name == project_root_or_name:
                 project_candidates.append(project)
         if len(project_candidates) == 1:
-            return project_candidates[0]
+            return project_candidates[0].get_project_instance()
         elif len(project_candidates) > 1:
             raise ValueError(
                 f"Multiple projects found with name '{project_root_or_name}'. Please activate it by location instead. "
@@ -432,10 +510,9 @@ class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
             )
         # no project found by name; check if it's a path
         if os.path.isdir(project_root_or_name):
-            project_root = Path(project_root_or_name).resolve()
             for project in self.projects:
-                if Path(project.project_root).resolve() == project_root:
-                    return project
+                if project.matches_root_path(project_root_or_name):
+                    return project.get_project_instance()
         return None
 
     def add_project_from_path(self, project_root: Path | str) -> "Project":
@@ -463,14 +540,14 @@ class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
         project_config = ProjectConfig.load(project_root, autogenerate=True)
 
         new_project = Project(project_root=str(project_root), project_config=project_config, is_newly_created=True)
-        self.projects.append(new_project)
+        self.projects.append(RegisteredProject.from_project_instance(new_project))
         self.save()
 
         return new_project
 
     def remove_project(self, project_name: str) -> None:
         # find the index of the project with the desired name and remove it
-        for i, project in enumerate(self.projects):
+        for i, project in enumerate(list(self.projects)):
             if project.project_name == project_name:
                 del self.projects[i]
                 break
@@ -488,5 +565,5 @@ class SerenaConfig(ToolInclusionDefinition, ToStringMixin):
         loaded_original_yaml = deepcopy(self.loaded_commented_yaml)
         # projects are unique absolute paths
         # we also canonicalize them before saving
-        loaded_original_yaml["projects"] = sorted({str(Path(project.project_root).resolve()) for project in self.projects})
+        loaded_original_yaml["projects"] = sorted({str(project.project_root) for project in self.projects})
         save_yaml(self.config_file_path, loaded_original_yaml, preserve_comments=True)

@@ -6,8 +6,8 @@ import sys
 from abc import abstractmethod
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from dataclasses import dataclass
-from logging import Formatter, Logger, StreamHandler
 from typing import Any, Literal, cast
 
 import docstring_parser
@@ -22,25 +22,23 @@ from serena.agent import (
     SerenaConfig,
 )
 from serena.config.context_mode import SerenaAgentContext, SerenaAgentMode
-from serena.constants import DEFAULT_CONTEXT, DEFAULT_MODES
+from serena.constants import DEFAULT_CONTEXT, DEFAULT_MODES, SERENA_LOG_FORMAT
 from serena.tools import Tool
 from serena.util.exception import show_fatal_exception_safe
+from serena.util.logging import MemoryLogHandler
 
 log = logging.getLogger(__name__)
-LOG_FORMAT = "%(levelname)-5s %(asctime)-15s %(name)s:%(funcName)s:%(lineno)d - %(message)s"
-LOG_LEVEL = logging.INFO
 
 
 def configure_logging(*args, **kwargs) -> None:  # type: ignore
-    # configure logging to stderr (will be captured by Claude Desktop); stdio is the MCP communication stream and cannot be used!
-    Logger.root.setLevel(LOG_LEVEL)
-    handler = StreamHandler(stream=sys.stderr)
-    handler.formatter = Formatter(LOG_FORMAT)
-    Logger.root.addHandler(handler)
+    # We only do something here if logging has not yet been configured.
+    # Normally, logging is configured in the MCP server startup script.
+    if not logging.is_enabled():
+        logging.basicConfig(level=logging.INFO, stream=sys.stderr, format=SERENA_LOG_FORMAT)
 
 
 # patch the logging configuration function in fastmcp, because it's hard-coded and broken
-server.configure_logging = configure_logging
+server.configure_logging = configure_logging  # type: ignore
 
 
 @dataclass
@@ -60,21 +58,144 @@ class SerenaMCPFactory:
         self.project = project
 
     @staticmethod
-    def make_mcp_tool(tool: Tool) -> MCPTool:
+    def _sanitize_for_openai_tools(schema: dict) -> dict:
+        """
+        This method was written by GPT-5, I have not reviewed it in detail.
+        Only called when `openai_tool_compatible` is True.
+
+        Make a Pydantic/JSON Schema object compatible with OpenAI tool schema.
+        - 'integer' -> 'number' (+ multipleOf: 1)
+        - remove 'null' from union type arrays
+        - coerce integer-only enums to number
+        - best-effort simplify oneOf/anyOf when they only differ by integer/number
+        """
+        s = deepcopy(schema)
+
+        def walk(node):  # type: ignore
+            if not isinstance(node, dict):
+                # lists get handled by parent calls
+                return node
+
+            # ---- handle type ----
+            t = node.get("type")
+            if isinstance(t, str):
+                if t == "integer":
+                    node["type"] = "number"
+                    # preserve existing multipleOf but ensure it's integer-like
+                    if "multipleOf" not in node:
+                        node["multipleOf"] = 1
+            elif isinstance(t, list):
+                # remove 'null' (OpenAI tools don't support nullables)
+                t2 = [x if x != "integer" else "number" for x in t if x != "null"]
+                if not t2:
+                    # fall back to object if it somehow becomes empty
+                    t2 = ["object"]
+                node["type"] = t2[0] if len(t2) == 1 else t2
+                if "integer" in t or "number" in t2:
+                    # if integers were present, keep integer-like restriction
+                    node.setdefault("multipleOf", 1)
+
+            # ---- enums of integers -> number ----
+            if "enum" in node and isinstance(node["enum"], list):
+                vals = node["enum"]
+                if vals and all(isinstance(v, int) for v in vals):
+                    node.setdefault("type", "number")
+                    # keep them as ints; JSON 'number' covers ints
+                    node.setdefault("multipleOf", 1)
+
+            # ---- simplify anyOf/oneOf if they only differ by integer/number ----
+            for key in ("oneOf", "anyOf"):
+                if key in node and isinstance(node[key], list):
+                    # Special case: anyOf or oneOf with "type X" and "null"
+                    if len(node[key]) == 2:
+                        types = [sub.get("type") for sub in node[key]]
+                        if "null" in types:
+                            non_null_type = next(t for t in types if t != "null")
+                            if isinstance(non_null_type, str):
+                                node["type"] = non_null_type
+                                node.pop(key, None)
+                                continue
+                    simplified = []
+                    changed = False
+                    for sub in node[key]:
+                        sub = walk(sub)  # recurse
+                        simplified.append(sub)
+                    # If all subs are the same after integer→number, collapse
+                    try:
+                        import json
+
+                        canon = [json.dumps(x, sort_keys=True) for x in simplified]
+                        if len(set(canon)) == 1:
+                            # copy the single schema up
+                            only = simplified[0]
+                            node.pop(key, None)
+                            for k, v in only.items():
+                                if k not in node:
+                                    node[k] = v
+                            changed = True
+                    except Exception:
+                        pass
+                    if not changed:
+                        node[key] = simplified
+
+            # ---- recurse into known schema containers ----
+            for child_key in ("properties", "patternProperties", "definitions", "$defs"):
+                if child_key in node and isinstance(node[child_key], dict):
+                    for k, v in list(node[child_key].items()):
+                        node[child_key][k] = walk(v)
+
+            # arrays/items
+            if "items" in node:
+                node["items"] = walk(node["items"])
+
+            # allOf/if/then/else - pass through with integer→number conversions applied inside
+            for key in ("allOf",):
+                if key in node and isinstance(node[key], list):
+                    node[key] = [walk(x) for x in node[key]]
+
+            if "if" in node:
+                node["if"] = walk(node["if"])
+            if "then" in node:
+                node["then"] = walk(node["then"])
+            if "else" in node:
+                node["else"] = walk(node["else"])
+
+            return node
+
+        return walk(s)
+
+    @staticmethod
+    def make_mcp_tool(tool: Tool, openai_tool_compatible: bool = True) -> MCPTool:
+        """
+        Create an MCP tool from a Serena Tool instance.
+
+        :param tool: The Serena Tool instance to convert.
+        :param openai_tool_compatible: whether to process the tool schema to be compatible with OpenAI tools
+            (doesn't accept integer, needs number instead, etc.). This allows using Serena MCP within codex.
+        """
         func_name = tool.get_name()
         func_doc = tool.get_apply_docstring() or ""
         func_arg_metadata = tool.get_apply_fn_metadata()
         is_async = False
         parameters = func_arg_metadata.arg_model.model_json_schema()
+        if openai_tool_compatible:
+            parameters = SerenaMCPFactory._sanitize_for_openai_tools(parameters)
 
         docstring = docstring_parser.parse(func_doc)
 
         # Mount the tool description as a combination of the docstring description and
         # the return value description, if it exists.
-        if docstring.description:
-            func_doc = f"{docstring.description.strip().strip('.')}."
+        overridden_description = tool.agent.get_context().tool_description_overrides.get(func_name, None)
+
+        if overridden_description is not None:
+            func_doc = overridden_description
+        elif docstring.description:
+            func_doc = docstring.description
         else:
             func_doc = ""
+        func_doc = func_doc.strip().strip(".")
+        if func_doc:
+            func_doc += "."
         if docstring.returns and (docstring_returns_descr := docstring.returns.description):
             # Only add a space before "Returns" if func_doc is not empty
             prefix = " " if func_doc else ""
@@ -109,13 +230,14 @@ class SerenaMCPFactory:
         pass
 
     # noinspection PyProtectedMember
-    def _set_mcp_tools(self, mcp: FastMCP) -> None:
+    def _set_mcp_tools(self, mcp: FastMCP, openai_tool_compatible: bool = False) -> None:
         """Update the tools in the MCP server"""
         if mcp is not None:
             mcp._tool_manager._tools = {}
             for tool in self._iter_tools():
-                mcp_tool = self.make_mcp_tool(tool)
+                mcp_tool = self.make_mcp_tool(tool, openai_tool_compatible=openai_tool_compatible)
                 mcp._tool_manager._tools[tool.get_name()] = mcp_tool
+            log.info(f"Starting MCP server with {len(mcp._tool_manager._tools)} tools: {list(mcp._tool_manager._tools.keys())}")
 
     @abstractmethod
     def _instantiate_agent(self, serena_config: SerenaConfig, modes: list[SerenaAgentMode]) -> None:
@@ -173,9 +295,8 @@ class SerenaMCPFactory:
         # `.env` files (e.g. containing LOG_LEVEL) that are not supposed to override the MCP settings;
         # retain only FASTMCP_ prefix for already set environment variables.
         Settings.model_config = SettingsConfigDict(env_prefix="FASTMCP_")
-
-        mcp_settings: Settings = Settings(lifespan=self.server_lifespan, host=host, port=port)
-        mcp = FastMCP(**mcp_settings.model_dump())
+        instructions = self._get_initial_instructions()
+        mcp = FastMCP(lifespan=self.server_lifespan, host=host, port=port, instructions=instructions)
         return mcp
 
     @asynccontextmanager
@@ -184,13 +305,17 @@ class SerenaMCPFactory:
         """Manage server startup and shutdown lifecycle."""
         yield None  # ensures MyPy understands we yield None
 
+    @abstractmethod
+    def _get_initial_instructions(self) -> str:
+        pass
+
 
 class SerenaMCPFactorySingleProcess(SerenaMCPFactory):
     """
     MCP server factory where the SerenaAgent and its language server run in the same process as the MCP server
     """
 
-    def __init__(self, context: str = DEFAULT_CONTEXT, project: str | None = None):
+    def __init__(self, context: str = DEFAULT_CONTEXT, project: str | None = None, memory_log_handler: MemoryLogHandler | None = None):
         """
         :param context: The context name or path to context file
         :param project: Either an absolute path to the project directory or a name of an already registered project.
@@ -199,16 +324,25 @@ class SerenaMCPFactorySingleProcess(SerenaMCPFactory):
         """
         super().__init__(context=context, project=project)
         self.agent: SerenaAgent | None = None
+        self.memory_log_handler = memory_log_handler
 
     def _instantiate_agent(self, serena_config: SerenaConfig, modes: list[SerenaAgentMode]) -> None:
-        self.agent = SerenaAgent(project=self.project, serena_config=serena_config, context=self.context, modes=modes)
+        self.agent = SerenaAgent(
+            project=self.project, serena_config=serena_config, context=self.context, modes=modes, memory_log_handler=self.memory_log_handler
+        )
 
     def _iter_tools(self) -> Iterator[Tool]:
         assert self.agent is not None
         yield from self.agent.get_exposed_tool_instances()
 
+    def _get_initial_instructions(self) -> str:
+        assert self.agent is not None
+        # we don't use the tool (which at the time of writing calls this method), since the tool may be disabled by the config
+        return self.agent.create_system_prompt()
+
     @asynccontextmanager
     async def server_lifespan(self, mcp_server: FastMCP) -> AsyncIterator[None]:
-        self._set_mcp_tools(mcp_server)
+        openai_tool_compatible = self.context.name in ["chatgpt", "codex", "oaicompat-agent"]
+        self._set_mcp_tools(mcp_server, openai_tool_compatible=openai_tool_compatible)
         log.info("MCP server lifetime setup complete")
         yield

@@ -14,7 +14,7 @@ from pathlib import Path, PurePath
 
 import requests
 
-from solidlsp.ls_exceptions import LanguageServerException
+from solidlsp.ls_exceptions import SolidLSPException
 from solidlsp.ls_logger import LanguageServerLogger
 from solidlsp.ls_types import UnifiedSymbolInformation
 
@@ -170,29 +170,30 @@ class FileUtils:
         """
         if not os.path.exists(file_path):
             logger.log(f"File read '{file_path}' failed: File does not exist.", logging.ERROR)
-            raise LanguageServerException(f"File read '{file_path}' failed: File does not exist.")
+            raise SolidLSPException(f"File read '{file_path}' failed: File does not exist.")
         try:
             with open(file_path, encoding="utf-8") as inp_file:
                 return inp_file.read()
         except Exception as exc:
             logger.log(f"File read '{file_path}' failed to read with encoding 'utf-8': {exc}", logging.ERROR)
-            raise LanguageServerException("File read failed.") from None
+            raise SolidLSPException("File read failed.") from None
 
     @staticmethod
     def download_file(logger: LanguageServerLogger, url: str, target_path: str) -> None:
         """
         Downloads the file from the given URL to the given {target_path}
         """
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
         try:
             response = requests.get(url, stream=True, timeout=60)
             if response.status_code != 200:
                 logger.log(f"Error downloading file '{url}': {response.status_code} {response.text}", logging.ERROR)
-                raise LanguageServerException("Error downloading file.")
+                raise SolidLSPException("Error downloading file.")
             with open(target_path, "wb") as f:
                 shutil.copyfileobj(response.raw, f)
         except Exception as exc:
             logger.log(f"Error downloading file '{url}': {exc}", logging.ERROR)
-            raise LanguageServerException("Error downloading file.") from None
+            raise SolidLSPException("Error downloading file.") from None
 
     @staticmethod
     def download_and_extract_archive(logger: LanguageServerLogger, url: str, target_path: str, archive_type: str) -> None:
@@ -220,10 +221,10 @@ class FileUtils:
                     shutil.copyfileobj(f_in, f_out)
             else:
                 logger.log(f"Unknown archive type '{archive_type}' for extraction", logging.ERROR)
-                raise LanguageServerException(f"Unknown archive type '{archive_type}'")
+                raise SolidLSPException(f"Unknown archive type '{archive_type}'")
         except Exception as exc:
             logger.log(f"Error extracting archive '{tmp_file_name}' obtained from '{url}': {exc}", logging.ERROR)
-            raise LanguageServerException("Error extracting archive.") from exc
+            raise SolidLSPException("Error extracting archive.") from exc
         finally:
             for tmp_file_name in tmp_files:
                 if os.path.exists(tmp_file_name):
@@ -246,6 +247,9 @@ class PlatformId(str, Enum):
     LINUX_arm64 = "linux-arm64"
     LINUX_MUSL_x64 = "linux-musl-x64"
     LINUX_MUSL_arm64 = "linux-musl-arm64"
+
+    def is_windows(self):
+        return self.value.startswith("win")
 
 
 class DotnetVersion(str, Enum):
@@ -277,7 +281,15 @@ class PlatformUtils:
         if system == "Windows" and machine == "":
             machine = cls._determine_windows_machine_type()
         system_map = {"Windows": "win", "Darwin": "osx", "Linux": "linux"}
-        machine_map = {"AMD64": "x64", "x86_64": "x64", "i386": "x86", "i686": "x86", "aarch64": "arm64", "arm64": "arm64"}
+        machine_map = {
+            "AMD64": "x64",
+            "x86_64": "x64",
+            "i386": "x86",
+            "i686": "x86",
+            "aarch64": "arm64",
+            "arm64": "arm64",
+            "ARM64": "arm64",
+        }
         if system in system_map and machine in machine_map:
             platform_id = system_map[system] + "-" + machine_map[machine]
             if system == "Linux" and bitness == "64bit":
@@ -286,7 +298,7 @@ class PlatformUtils:
                     platform_id += "-" + libc
             return PlatformId(platform_id)
         else:
-            raise LanguageServerException(f"Unknown platform: {system=}, {machine=}, {bitness=}")
+            raise SolidLSPException(f"Unknown platform: {system=}, {machine=}, {bitness=}")
 
     @staticmethod
     def _determine_windows_machine_type():
@@ -342,7 +354,7 @@ class PlatformUtils:
                     available_version_cmd_output.append(version_cmd_output)
 
             if not available_version_cmd_output:
-                raise LanguageServerException("dotnet not found on the system")
+                raise SolidLSPException("dotnet not found on the system")
 
             # Check for supported versions in order of preference (latest first)
             for version_cmd_output in available_version_cmd_output:
@@ -358,7 +370,7 @@ class PlatformUtils:
                     return DotnetVersion.V4
 
             # If no supported version found, raise exception with all available versions
-            raise LanguageServerException(
+            raise SolidLSPException(
                 f"No supported dotnet version found. Available versions: {', '.join(available_version_cmd_output)}. Supported versions: 4, 6, 7, 8"
             )
         except (FileNotFoundError, subprocess.CalledProcessError):
@@ -366,7 +378,7 @@ class PlatformUtils:
                 result = subprocess.run(["mono", "--version"], capture_output=True, check=True)
                 return DotnetVersion.VMONO
             except (FileNotFoundError, subprocess.CalledProcessError):
-                raise LanguageServerException("dotnet or mono not found on the system")
+                raise SolidLSPException("dotnet or mono not found on the system")
 
 
 class SymbolUtils:

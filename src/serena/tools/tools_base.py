@@ -1,6 +1,5 @@
 import inspect
 import os
-import traceback
 from abc import ABC
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ from serena.prompt_factory import PromptFactory
 from serena.symbol import LanguageServerSymbolRetriever
 from serena.util.class_decorators import singleton
 from serena.util.inspection import iter_subclasses
+from solidlsp.ls_exceptions import SolidLSPException
 
 if TYPE_CHECKING:
     from serena.agent import LinesRead, MemoriesManager, SerenaAgent
@@ -73,19 +73,37 @@ class Component(ABC):
 TOOL_DEFAULT_MAX_ANSWER_LENGTH = int(2e5)
 
 
-class ToolMarkerCanEdit:
+class ToolMarker:
+    """
+    Base class for tool markers.
+    """
+
+
+class ToolMarkerCanEdit(ToolMarker):
     """
     Marker class for all tools that can perform editing operations on files.
     """
 
 
-class ToolMarkerDoesNotRequireActiveProject:
+class ToolMarkerDoesNotRequireActiveProject(ToolMarker):
     pass
 
 
-class ToolMarkerOptional:
+class ToolMarkerOptional(ToolMarker):
     """
     Marker class for optional tools that are disabled by default.
+    """
+
+
+class ToolMarkerSymbolicRead(ToolMarker):
+    """
+    Marker class for tools that perform symbol read operations.
+    """
+
+
+class ToolMarkerSymbolicEdit(ToolMarkerCanEdit):
+    """
+    Marker class for tools that perform symbolic edit operations.
     """
 
 
@@ -237,18 +255,24 @@ class Tool(Component):
                         self.agent.reset_language_server()
 
                 # apply the actual tool
-                result = apply_fn(**kwargs)
+                try:
+                    result = apply_fn(**kwargs)
+                except SolidLSPException as e:
+                    if e.is_language_server_terminated():
+                        log.error(f"Language server terminated while executing tool ({e}). Restarting the language server and retrying ...")
+                        self.agent.reset_language_server()
+                        result = apply_fn(**kwargs)
+                    else:
+                        raise
+
+                # record tool usage
                 self.agent.record_tool_usage_if_enabled(kwargs, result, self)
 
             except Exception as e:
                 if not catch_exceptions:
                     raise
-                msg = f"Error executing tool: {e}\n{traceback.format_exc()}"
-                log.error(
-                    f"Error executing tool: {e}. "
-                    f"Consider restarting the language server to solve this (especially, if it's a timeout of a symbolic operation)",
-                    exc_info=e,
-                )
+                msg = f"Error executing tool: {e}"
+                log.error(f"Error executing tool: {e}", exc_info=e)
                 result = msg
 
             if log_call:
@@ -339,18 +363,49 @@ class ToolRegistry:
     def get_all_tool_classes(self) -> list[type[Tool]]:
         return list(t.tool_class for t in self._tool_dict.values())
 
+    def get_tool_classes_default_enabled(self) -> list[type[Tool]]:
+        """
+        :return: the list of tool classes that are enabled by default (i.e. non-optional tools).
+        """
+        return [t.tool_class for t in self._tool_dict.values() if not t.is_optional]
+
+    def get_tool_classes_optional(self) -> list[type[Tool]]:
+        """
+        :return: the list of tool classes that are optional (i.e. disabled by default).
+        """
+        return [t.tool_class for t in self._tool_dict.values() if t.is_optional]
+
     def get_tool_names_default_enabled(self) -> list[str]:
         """
         :return: the list of tool names that are enabled by default (i.e. non-optional tools).
         """
         return [t.tool_name for t in self._tool_dict.values() if not t.is_optional]
 
-    def print_tool_overview(self, tools: Iterable[type[Tool] | Tool] | None = None) -> None:
+    def get_tool_names_optional(self) -> list[str]:
         """
-        Print a summary of the tools. If no tools are passed, a summary of all tools is printed.
+        :return: the list of tool names that are optional (i.e. disabled by default).
+        """
+        return [t.tool_name for t in self._tool_dict.values() if t.is_optional]
+
+    def get_tool_names(self) -> list[str]:
+        """
+        :return: the list of all tool names.
+        """
+        return list(self._tool_dict.keys())
+
+    def print_tool_overview(
+        self, tools: Iterable[type[Tool] | Tool] | None = None, include_optional: bool = False, only_optional: bool = False
+    ) -> None:
+        """
+        Print a summary of the tools. If no tools are passed, a summary of the selection of tools (all, default or only optional) is printed.
         """
         if tools is None:
-            tools = [tool.tool_class for tool in self._tool_dict.values() if not tool.is_optional]
+            if only_optional:
+                tools = self.get_tool_classes_optional()
+            elif include_optional:
+                tools = self.get_all_tool_classes()
+            else:
+                tools = self.get_tool_classes_default_enabled()
 
         tool_dict: dict[str, type[Tool] | Tool] = {}
         for tool_class in tools:

@@ -7,9 +7,9 @@ import os
 import pathlib
 import shutil
 import threading
-from time import sleep
 
 from overrides import override
+from sensai.util.logging import LogTime
 
 from solidlsp.ls import SolidLanguageServer
 from solidlsp.ls_config import LanguageServerConfig
@@ -17,6 +17,7 @@ from solidlsp.ls_logger import LanguageServerLogger
 from solidlsp.ls_utils import PlatformId, PlatformUtils
 from solidlsp.lsp_protocol_handler.lsp_types import InitializeParams
 from solidlsp.lsp_protocol_handler.server import ProcessLaunchInfo
+from solidlsp.settings import SolidLSPSettings
 
 from .common import RuntimeDependency, RuntimeDependencyCollection
 
@@ -41,17 +42,20 @@ class TypeScriptLanguageServer(SolidLanguageServer):
     Provides TypeScript specific instantiation of the LanguageServer class. Contains various configurations and settings specific to TypeScript.
     """
 
-    def __init__(self, config: LanguageServerConfig, logger: LanguageServerLogger, repository_root_path: str):
+    def __init__(
+        self, config: LanguageServerConfig, logger: LanguageServerLogger, repository_root_path: str, solidlsp_settings: SolidLSPSettings
+    ):
         """
         Creates a TypeScriptLanguageServer instance. This class is not meant to be instantiated directly. Use LanguageServer.create() instead.
         """
-        ts_lsp_executable_path = self._setup_runtime_dependencies(logger, config)
+        ts_lsp_executable_path = self._setup_runtime_dependencies(logger, config, solidlsp_settings)
         super().__init__(
             config,
             logger,
             repository_root_path,
             ProcessLaunchInfo(cmd=ts_lsp_executable_path, cwd=repository_root_path),
             "typescript",
+            solidlsp_settings,
         )
         self.server_ready = threading.Event()
         self.initialize_searcher_command_available = threading.Event()
@@ -66,7 +70,9 @@ class TypeScriptLanguageServer(SolidLanguageServer):
         ]
 
     @classmethod
-    def _setup_runtime_dependencies(cls, logger: LanguageServerLogger, config: LanguageServerConfig) -> str:
+    def _setup_runtime_dependencies(
+        cls, logger: LanguageServerLogger, config: LanguageServerConfig, solidlsp_settings: SolidLSPSettings
+    ) -> list[str]:
         """
         Setup runtime dependencies for TypeScript Language Server and return the command to start the server.
         """
@@ -88,13 +94,13 @@ class TypeScriptLanguageServer(SolidLanguageServer):
                 RuntimeDependency(
                     id="typescript",
                     description="typescript package",
-                    command="npm install --prefix ./ typescript@5.5.4",
+                    command=["npm", "install", "--prefix", "./", "typescript@5.5.4"],
                     platform_id="any",
                 ),
                 RuntimeDependency(
                     id="typescript-language-server",
                     description="typescript-language-server package",
-                    command="npm install --prefix ./ typescript-language-server@4.3.3",
+                    command=["npm", "install", "--prefix", "./", "typescript-language-server@4.3.3"],
                     platform_id="any",
                 ),
             ]
@@ -113,17 +119,18 @@ class TypeScriptLanguageServer(SolidLanguageServer):
         assert is_npm_installed, "npm is not installed or isn't in PATH. Please install npm and try again."
 
         # Install typescript and typescript-language-server if not already installed
-        tsserver_ls_dir = os.path.join(cls.ls_resources_dir(), "ts-lsp")
+        tsserver_ls_dir = os.path.join(cls.ls_resources_dir(solidlsp_settings), "ts-lsp")
         tsserver_executable_path = os.path.join(tsserver_ls_dir, "node_modules", ".bin", "typescript-language-server")
         if not os.path.exists(tsserver_executable_path):
             logger.log(f"Typescript Language Server executable not found at {tsserver_executable_path}. Installing...", logging.INFO)
-            deps.install(logger, tsserver_ls_dir)
+            with LogTime("Installation of TypeScript language server dependencies", logger=logger.logger):
+                deps.install(logger, tsserver_ls_dir)
 
         if not os.path.exists(tsserver_executable_path):
             raise FileNotFoundError(
                 f"typescript-language-server executable not found at {tsserver_executable_path}, something went wrong with the installation."
             )
-        return f"{tsserver_executable_path} --stdio"
+        return [tsserver_executable_path, "--stdio"]
 
     @staticmethod
     def _get_initialize_params(repository_absolute_path: str) -> InitializeParams:
@@ -242,12 +249,5 @@ class TypeScriptLanguageServer(SolidLanguageServer):
         self.completions_available.set()
 
     @override
-    # For some reason, the LS may need longer to process this, so we just retry
-    def _send_references_request(self, relative_file_path: str, line: int, column: int):
-        # TODO: The LS doesn't return references contained in other files if it doesn't sleep. This is
-        #   despite the LS having processed requests already. I don't know what causes this, but sleeping
-        #   one second helps. It may be that sleeping only once is enough but that's hard to reliably test.
-        #   It may be that even this 1sec is not enough in larger TS projects, at some point we should find what
-        #   causes this and solve it.
-        sleep(1)
-        return super()._send_references_request(relative_file_path, line, column)
+    def _get_wait_time_for_cross_file_referencing(self) -> float:
+        return 1

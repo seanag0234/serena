@@ -13,26 +13,26 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from logging import Logger
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 from sensai.util import logging
 from sensai.util.logging import LogTime
 
+from interprompt.jinja_template import JinjaTemplate
 from serena import serena_version
 from serena.analytics import RegisteredTokenCountEstimator, ToolUsageStats
 from serena.config.context_mode import RegisteredContext, SerenaAgentContext, SerenaAgentMode
 from serena.config.serena_config import SerenaConfig, ToolInclusionDefinition, ToolSet, get_serena_managed_in_project_dir
-from serena.constants import (
-    SERENA_LOG_FORMAT,
-)
-from serena.dashboard import MemoryLogHandler, SerenaDashboardAPI
+from serena.dashboard import SerenaDashboardAPI
 from serena.project import Project
 from serena.prompt_factory import SerenaPromptFactory
-from serena.tools import ActivateProjectTool, Tool, ToolRegistry
+from serena.tools import ActivateProjectTool, Tool, ToolMarker, ToolRegistry
+from serena.util.inspection import iter_subclasses
+from serena.util.logging import MemoryLogHandler
 from solidlsp import SolidLanguageServer
 
 if TYPE_CHECKING:
-    from serena.gui_log_viewer import GuiLogViewerHandler
+    from serena.gui_log_viewer import GuiLogViewer
 
 log = logging.getLogger(__name__)
 TTool = TypeVar("TTool", bound="Tool")
@@ -92,6 +92,24 @@ class MemoriesManager:
         memory_file_path.unlink()
         return f"Memory {name} deleted."
 
+
+class AvailableTools:
+    def __init__(self, tools: list[Tool]):
+        """
+        :param tools: the list of available tools
+        """
+        self.tools = tools
+        self.tool_names = [tool.get_name_from_cls() for tool in tools]
+        self.tool_marker_names = set()
+        for marker_class in iter_subclasses(ToolMarker):
+            for tool in tools:
+                if isinstance(tool, marker_class):
+                    self.tool_marker_names.add(marker_class.__name__)
+
+    def __len__(self) -> int:
+        return len(self.tools)
+
+
 class SerenaAgent:
     def __init__(
         self,
@@ -100,6 +118,7 @@ class SerenaAgent:
         serena_config: SerenaConfig | None = None,
         context: SerenaAgentContext | None = None,
         modes: list[SerenaAgentMode] | None = None,
+        memory_log_handler: MemoryLogHandler | None = None,
     ):
         """
         :param project: the project to load immediately or None to not load any project; may be a path to the project or a name of
@@ -110,6 +129,8 @@ class SerenaAgent:
             The context may adjust prompts, tool availability, and tool descriptions.
         :param modes: list of modes in which the agent is operating (they will be combined), None for default modes.
             The modes may adjust prompts, tool availability, and tool descriptions.
+        :param memory_log_handler: a MemoryLogHandler instance from which to read log messages; if None, a new one will be created
+            if necessary.
         """
         # obtain serena configuration using the decoupled factory function
         self.serena_config = serena_config or SerenaConfig.from_config_file()
@@ -120,20 +141,25 @@ class SerenaAgent:
             log.info(f"Changing the root logger level to {serena_log_level}")
             Logger.root.setLevel(serena_log_level)
 
+        def get_memory_log_handler() -> MemoryLogHandler:
+            nonlocal memory_log_handler
+            if memory_log_handler is None:
+                memory_log_handler = MemoryLogHandler(level=serena_log_level)
+                Logger.root.addHandler(memory_log_handler)
+            return memory_log_handler
+
         # open GUI log window if enabled
-        self._gui_log_handler: Union["GuiLogViewerHandler", None] = None  # noqa
+        self._gui_log_viewer: Optional["GuiLogViewer"] = None
         if self.serena_config.gui_log_window_enabled:
             if platform.system() == "Darwin":
                 log.warning("GUI log window is not supported on macOS")
             else:
                 # even importing on macOS may fail if tkinter dependencies are unavailable (depends on Python interpreter installation
                 # which uv used as a base, unfortunately)
-                from serena.gui_log_viewer import GuiLogViewer, GuiLogViewerHandler
+                from serena.gui_log_viewer import GuiLogViewer
 
-                self._gui_log_handler = GuiLogViewerHandler(
-                    GuiLogViewer("dashboard", title="Serena Logs"), level=serena_log_level, format_string=SERENA_LOG_FORMAT
-                )
-                Logger.root.addHandler(self._gui_log_handler)
+                self._gui_log_viewer = GuiLogViewer("dashboard", title="Serena Logs", memory_log_handler=get_memory_log_handler())
+                self._gui_log_viewer.start()
 
         # set the agent context
         if context is None:
@@ -145,8 +171,8 @@ class SerenaAgent:
         tool_names = [tool.get_name_from_cls() for tool in self._all_tools.values()]
 
         # If GUI log window is enabled, set the tool names for highlighting
-        if self._gui_log_handler is not None:
-            self._gui_log_handler.log_viewer.set_tool_names(tool_names)
+        if self._gui_log_viewer is not None:
+            self._gui_log_viewer.set_tool_names(tool_names)
 
         self._tool_usage_stats: ToolUsageStats | None = None
         if self.serena_config.record_tool_usage_stats:
@@ -156,22 +182,25 @@ class SerenaAgent:
 
         # start the dashboard (web frontend), registering its log handler
         if self.serena_config.web_dashboard:
-            dashboard_log_handler = MemoryLogHandler(level=serena_log_level)
-            Logger.root.addHandler(dashboard_log_handler)
             self._dashboard_thread, port = SerenaDashboardAPI(
-                dashboard_log_handler, tool_names, tool_usage_stats=self._tool_usage_stats
+                get_memory_log_handler(), tool_names, tool_usage_stats=self._tool_usage_stats
             ).run_in_thread()
+            dashboard_url = f"http://127.0.0.1:{port}/dashboard/index.html"
+            log.info("Serena web dashboard started at %s", dashboard_url)
             if self.serena_config.web_dashboard_open_on_launch:
                 # open the dashboard URL in the default web browser (using a separate process to control
                 # output redirection)
-                process = multiprocessing.Process(target=self._open_dashboard, args=(port,))
+                process = multiprocessing.Process(target=self._open_dashboard, args=(dashboard_url,))
                 process.start()
+                process.join(timeout=1)
 
         # log fundamental information
         log.info(f"Starting Serena server (version={serena_version()}, process id={os.getpid()}, parent process id={os.getppid()})")
         log.info("Configuration file: %s", self.serena_config.config_file_path)
         log.info("Available projects: {}".format(", ".join(self.serena_config.project_names)))
         log.info(f"Loaded tools ({len(self._all_tools)}): {', '.join([tool.get_name_from_cls() for tool in self._all_tools.values()])}")
+
+        self._check_shell_settings()
 
         # determine the base toolset defining the set of exposed tools (which e.g. the MCP shall see),
         # limited by the Serena config, the context (which is fixed for the session) and JetBrains mode
@@ -182,7 +211,7 @@ class SerenaAgent:
             tool_inclusion_definitions.append(SerenaAgentMode.from_name_internal("jetbrains"))
 
         self._base_tool_set = ToolSet.default().apply(*tool_inclusion_definitions)
-        self._exposed_tools = {tc: t for tc, t in self._all_tools.items() if self._base_tool_set.includes_name(t.get_name())}
+        self._exposed_tools = AvailableTools([t for t in self._all_tools.values() if self._base_tool_set.includes_name(t.get_name())])
         log.info(f"Number of exposed tools: {len(self._exposed_tools)}")
 
         # create executor for starting the language server and running tools in another thread
@@ -215,7 +244,23 @@ class SerenaAgent:
             try:
                 self.activate_project_from_path_or_name(project)
             except Exception as e:
-                log.error(f"Error activating project '{project}' at startup: {e}")
+                log.error(f"Error activating project '{project}' at startup: {e}", exc_info=e)
+
+    def get_context(self) -> SerenaAgentContext:
+        return self._context
+
+    def get_tool_description_override(self, tool_name: str) -> str | None:
+        return self._context.tool_description_overrides.get(tool_name, None)
+
+    def _check_shell_settings(self) -> None:
+        # On Windows, Claude Code sets COMSPEC to Git-Bash (often even with a path containing spaces),
+        # which causes all sorts of trouble, preventing language servers from being launched correctly.
+        # So we make sure that COMSPEC is unset if it has been set to bash specifically.
+        if platform.system() == "Windows":
+            comspec = os.environ.get("COMSPEC", "")
+            if "bash" in comspec:
+                os.environ["COMSPEC"] = ""  # force use of default shell
+                log.info("Adjusting COMSPEC environment variable to use the default shell instead of '%s'", comspec)
 
     def _ide_context_tool_inclusion_definitions(self, project_root_or_name: str | None) -> list[ToolInclusionDefinition]:
         """
@@ -252,7 +297,7 @@ class SerenaAgent:
             log.debug(f"Tool usage statistics recording is disabled, not recording usage of '{tool_name}'.")
 
     @staticmethod
-    def _open_dashboard(port: int) -> None:
+    def _open_dashboard(url: str) -> None:
         # Redirect stdout and stderr file descriptors to /dev/null,
         # making sure that nothing can be written to stdout/stderr, even by subprocesses
         null_fd = os.open(os.devnull, os.O_WRONLY)
@@ -261,7 +306,7 @@ class SerenaAgent:
         os.close(null_fd)
 
         # open the dashboard URL in the default web browser
-        webbrowser.open(f"http://localhost:{port}/dashboard/index.html")
+        webbrowser.open(url)
 
     def get_project_root(self) -> str:
         """
@@ -281,7 +326,7 @@ class SerenaAgent:
             If a client should attempt to use a tool that is dynamically disabled
             (e.g. because a project is activated that disables it), it will receive an error.
         """
-        return list(self._exposed_tools.values())
+        return list(self._exposed_tools.tools)
 
     def get_active_project(self) -> Project | None:
         """
@@ -315,11 +360,21 @@ class SerenaAgent:
         """
         return list(self._modes)
 
+    def _format_prompt(self, prompt_template: str) -> str:
+        template = JinjaTemplate(prompt_template)
+        return template.render(available_tools=self._exposed_tools.tool_names, available_markers=self._exposed_tools.tool_marker_names)
+
     def create_system_prompt(self) -> str:
-        return self.prompt_factory.create_system_prompt(
-            context_system_prompt=self._context.prompt,
-            mode_system_prompts=[mode.prompt for mode in self._modes],
+        available_markers = self._exposed_tools.tool_marker_names
+        log.info("Generating system prompt with available_tools=(see exposed tools), available_markers=%s", available_markers)
+        system_prompt = self.prompt_factory.create_system_prompt(
+            context_system_prompt=self._format_prompt(self._context.prompt),
+            mode_system_prompts=[self._format_prompt(mode.prompt) for mode in self._modes],
+            available_tools=self._exposed_tools.tool_names,
+            available_markers=available_markers,
         )
+        log.info("System prompt:\n%s", system_prompt)
+        return system_prompt
 
     def _update_active_tools(self) -> None:
         """
@@ -411,10 +466,10 @@ class SerenaAgent:
         """
         project_instance: Project | None = self.serena_config.get_project(project_root_or_name)
         if project_instance is not None:
-            log.info(f"Found registered project {project_instance.project_name} at path {project_instance.project_root}.")
+            log.info(f"Found registered project '{project_instance.project_name}' at path {project_instance.project_root}")
         elif autogenerate and os.path.isdir(project_root_or_name):
             project_instance = self.serena_config.add_project_from_path(project_root_or_name)
-            log.info(f"Added new project {project_instance.project_name} for path {project_instance.project_root}.")
+            log.info(f"Added new project {project_instance.project_name} for path {project_instance.project_root}")
         return project_instance
 
     def activate_project_from_path_or_name(self, project_root_or_name: str) -> Project:
@@ -544,9 +599,9 @@ class SerenaAgent:
     def print_tool_overview(self) -> None:
         ToolRegistry().print_tool_overview(self._active_tools.values())
 
-    def mark_file_modified(self, relativ_path: str) -> None:
+    def mark_file_modified(self, relative_path: str) -> None:
         assert self.lines_read is not None
-        self.lines_read.invalidate_lines_read(relativ_path)
+        self.lines_read.invalidate_lines_read(relative_path)
 
     def __del__(self) -> None:
         """
@@ -560,7 +615,10 @@ class SerenaAgent:
             assert self.language_server is not None
             self.language_server.save_cache()
             self.language_server.stop()
-        if self._gui_log_handler:
+        if self._gui_log_viewer:
             log.info("Stopping the GUI log window ...")
-            self._gui_log_handler.stop_viewer()
-            Logger.root.removeHandler(self._gui_log_handler)
+            self._gui_log_viewer.stop()
+
+    def get_tool_by_name(self, tool_name: str) -> Tool:
+        tool_class = ToolRegistry().get_tool_class_by_name(tool_name)
+        return self.get_tool(tool_class)

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import logging
 import os
+import platform
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from solidlsp.ls_logger import LanguageServerLogger
 from solidlsp.ls_utils import FileUtils, PlatformUtils
+from solidlsp.util.subprocess_util import subprocess_kwargs
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(kw_only=True)
@@ -18,7 +23,7 @@ class RuntimeDependency:
     url: str | None = None
     archive_type: str | None = None
     binary_name: str | None = None
-    command: str | None = None
+    command: str | list[str] | None = None
     package_name: str | None = None
     package_version: str | None = None
     extract_path: str | None = None
@@ -68,28 +73,36 @@ class RuntimeDependencyCollection:
         return results
 
     @staticmethod
-    def _run_command(command: str, cwd: str) -> None:
-        if PlatformUtils.get_platform_id().value.startswith("win"):
-            subprocess.run(
-                command,
-                shell=True,
-                check=True,
-                cwd=cwd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        else:
+    def _run_command(command: str | list[str], cwd: str) -> None:
+        kwargs = subprocess_kwargs()
+        if not PlatformUtils.get_platform_id().is_windows():
             import pwd
 
-            user = pwd.getpwuid(os.getuid()).pw_name
-            subprocess.run(
-                command,
-                shell=True,
-                check=True,
-                user=user,
-                cwd=cwd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            kwargs["user"] = pwd.getpwuid(os.getuid()).pw_name
+
+        is_windows = platform.system() == "Windows"
+        if not isinstance(command, str) and not is_windows:
+            # Since we are using the shell, we need to convert the command list to a single string
+            # on Linux/macOS
+            command = " ".join(command)
+
+        log.info("Running command %s in '%s'", f"'{command}'" if isinstance(command, str) else command, cwd)
+
+        completed_process = subprocess.run(
+            command,
+            shell=True,
+            check=True,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            **kwargs,
+        )
+        if completed_process.returncode != 0:
+            log.warning("Command '%s' failed with return code %d", command, completed_process.returncode)
+            log.warning("Command output:\n%s", completed_process.stdout)
+        else:
+            log.info(
+                "Command completed successfully",
             )
 
     @staticmethod
